@@ -211,27 +211,27 @@ app.get('/phone', async (request, reply) => {
     await tryCameraUrl(specs.review_url);
   }
 
-  // Attempt 2: search GSMArena for a camera_samples news article.
-  // Some phones (e.g. iQOO Z7 Pro) only have a camera-samples news page,
-  // not a full review. The specs page doesn't link to it, so we search directly.
+  // Attempt 2: scrape the device's GSMArena opinions/articles page.
+  // GSMArena has a dedicated page for every device at:
+  //   {base}-opinions-{id}.php   (same ID as the specs page slug)
+  // This page lists ALL articles, news, and camera-samples posts for the device.
+  // This is the universal fix — works for any phone, not just iQOO Z7 Pro.
   if (cameraSamples.length === 0) {
     try {
       const { getHtml } = await import('../src/parser/parser.service');
       const { load } = await import('cheerio');
-      // Device base slug without numeric ID suffix: "vivo_iqoo_z7_pro_5g-11843" -> "vivo_iqoo_z7_pro_5g"
-      const deviceBase = deviceSlug.replace(/-\d+$/, '').toLowerCase();
-      const queries = [bestMatch.name, bestMatch.name + ' camera samples'];
-      for (const q of queries) {
-        if (cameraSamples.length > 0) break;
-        const searchUrl = 'https://www.gsmarena.com/search.php3?sQuickSearch=yes&sName=' + encodeURIComponent(q);
-        const html = await getHtml(searchUrl);
+
+      // Derive opinions page URL from device slug: "vivo_iqoo_z7_pro_5g-11843"
+      const slugMatch = deviceSlug.match(/^(.+)-(\d+)$/);
+      if (slugMatch) {
+        const opinionsUrl = `https://www.gsmarena.com/${slugMatch[1]}-opinions-${slugMatch[2]}.php`;
+        const html = await getHtml(opinionsUrl);
         const $ = load(html);
         const links: string[] = [];
         $('a[href]').each((_: number, el: any) => {
           const href: string = $(el).attr('href') || '';
           const lower = href.toLowerCase();
           if (!lower.endsWith('.php')) return;
-          if (!lower.includes(deviceBase)) return;
           if (lower.includes('camera_samples') || lower.includes('camera-samples') ||
               (lower.includes('-news-') && lower.includes('camera'))) {
             const full = href.startsWith('http') ? href : ('https://www.gsmarena.com/' + href);
@@ -242,7 +242,7 @@ app.get('/phone', async (request, reply) => {
           if (await tryCameraUrl(link)) break;
         }
       }
-    } catch { /* search failed */ }
+    } catch { /* opinions page failed */ }
   }
 
   return {
