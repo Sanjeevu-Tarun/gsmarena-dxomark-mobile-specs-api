@@ -194,6 +194,23 @@ async function findCameraPageNumber(baseReviewSlug: string, reviewId: string): P
  *
  * We parse these to produce clean category labels.
  */
+/**
+ * Returns true if this caption belongs to a comparison shot from a DIFFERENT device.
+ * e.g. "Daylight comparison, main camera (1x): Galaxy S25 Ultra - ..."
+ * These should be excluded from the primary device's samples.
+ */
+function isComparisonShot(caption: string): boolean {
+  if (!/comparison/i.test(caption)) return false;
+  // Find text after the last colon, up to the first dash
+  const colonIdx = caption.lastIndexOf(':');
+  if (colonIdx === -1) return false;
+  const afterColon = caption.slice(colonIdx + 1);
+  const dashIdx = afterColon.indexOf(' - ');
+  const subject = (dashIdx !== -1 ? afterColon.slice(0, dashIdx) : afterColon).toLowerCase().trim();
+  // Keep only S26 Ultra own comparison shots; drop all others
+  return !subject.includes('s26 ultra');
+}
+
 function categoryFromCaption(caption: string): string {
   const c = caption.toLowerCase();
 
@@ -203,38 +220,34 @@ function categoryFromCaption(caption: string): string {
   // Video
   if (/\bvideo\b/.test(c)) return 'Video';
 
-  // Low-light / Night
+  // Low-light / Night — check zoom level first
   if (/low.?light|night/.test(c)) {
-    if (/telephoto.*3x|3x.*telephoto/.test(c)) return 'Night / Low Light — 3x Zoom';
-    if (/telephoto.*5x|5x.*telephoto/.test(c)) return 'Night / Low Light — 5x Zoom';
     if (/ultrawide|ultra.?wide/.test(c)) return 'Night / Low Light — Ultra-Wide';
-    if (/front|selfie/.test(c)) return 'Night / Low Light — Selfie';
+    if (/front|selfie/.test(c))         return 'Night / Low Light — Selfie';
+    // Both "telephoto camera (3x)" and "main camera (3x)" patterns
+    if (/\b10x\b/.test(c)) return 'Night / Low Light — 10x Zoom';
+    if (/\b5x\b/.test(c))  return 'Night / Low Light — 5x Zoom';
+    if (/\b3x\b/.test(c))  return 'Night / Low Light — 3x Zoom';
+    if (/\b2x\b/.test(c))  return 'Night / Low Light — 2x';
     return 'Night / Low Light';
   }
 
   // Ultra-wide
   if (/ultrawide|ultra.?wide/.test(c)) return 'Ultra-Wide';
 
-  // Zoom levels — telephoto
-  if (/telephoto.*10x|10x.*telephoto/.test(c)) return 'Zoom — 10x';
-  if (/telephoto.*5x|5x.*telephoto/.test(c)) return 'Zoom — 5x';
-  if (/telephoto.*3x|3x.*telephoto/.test(c)) return 'Zoom — 3x';
+  // Zoom — detect by zoom multiplier anywhere in caption
+  // covers both "telephoto camera (Nx)" and "main camera (Nx)" patterns
+  if (/\b30x\b/.test(c)) return 'Zoom — 30x';
+  if (/\b10x\b/.test(c)) return 'Zoom — 10x';
+  if (/\b5x\b/.test(c))  return 'Zoom — 5x';
+  if (/\b3x\b/.test(c))  return 'Zoom — 3x';
+  if (/\b2x\b/.test(c))  return 'Main Camera — 2x';
+
+  // Plain "telephoto" with no multiplier
   if (/telephoto/.test(c)) return 'Zoom';
 
-  // Main camera zoom levels
-  if (/main.*2x|2x.*main/.test(c)) return 'Main Camera — 2x';
-  if (/main.*camera|main.*cam/.test(c)) return 'Main Camera';
-
-  // Daylight fallback
-  if (/daylight/.test(c)) return 'Main Camera';
-
-  // Human subjects — map to correct camera
-  if (/human subject/.test(c)) {
-    if (/3x/.test(c)) return 'Zoom — 3x';
-    if (/5x/.test(c)) return 'Zoom — 5x';
-    if (/2x/.test(c)) return 'Main Camera — 2x';
-    return 'Main Camera';
-  }
+  // Main camera (1x or unspecified)
+  if (/main.*camera|main.*cam|daylight/.test(c)) return 'Main Camera';
 
   return 'Camera Samples';
 }
@@ -271,6 +284,10 @@ async function scrapeCameraPage(url: string): Promise<ICameraSampleCategory[]> {
     seen.add(fullUrl);
 
     const caption = $(el).attr('alt') || '';
+
+    // Skip comparison shots from OTHER devices (S25 Ultra, iPhone, Pixel, etc.)
+    if (isComparisonShot(caption)) return;
+
     const label = categoryFromCaption(caption);
 
     if (!categoryMap.has(label)) categoryMap.set(label, []);
@@ -286,10 +303,12 @@ async function scrapeCameraPage(url: string): Promise<ICameraSampleCategory[]> {
   const order = [
     'Main Camera', 'Main Camera — 2x',
     'Ultra-Wide',
-    'Zoom — 3x', 'Zoom — 5x', 'Zoom — 10x', 'Zoom',
+    'Zoom — 3x', 'Zoom — 5x', 'Zoom — 10x', 'Zoom — 30x', 'Zoom',
     'Portrait',
-    'Night / Low Light', 'Night / Low Light — 3x Zoom', 'Night / Low Light — 5x Zoom',
-    'Night / Low Light — Ultra-Wide', 'Night / Low Light — Selfie',
+    'Night / Low Light', 'Night / Low Light — 2x',
+    'Night / Low Light — 3x Zoom', 'Night / Low Light — 5x Zoom',
+    'Night / Low Light — 10x Zoom', 'Night / Low Light — Ultra-Wide',
+    'Night / Low Light — Selfie',
     'Selfie',
     'Video',
     'Camera Samples',
