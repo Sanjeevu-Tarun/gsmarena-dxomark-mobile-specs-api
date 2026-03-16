@@ -22,6 +22,29 @@ export async function getHtml(url: string): Promise<string> {
   return data;
 }
 
+/**
+ * Given an actual GSMArena thumbnail src from the page, extract the device name
+ * and return the HD bigpic URL. Falls back to slugToBigpic if extraction fails.
+ *
+ * GSMArena thumbnail pattern:
+ *   https://fdn2.gsmarena.com/vv/pics/samsung/samsung-galaxy-s26-ultra-1.jpg
+ * Bigpic pattern:
+ *   https://fdn2.gsmarena.com/vv/bigpic/samsung-galaxy-s26-ultra.jpg
+ */
+function toBigpicFromImgSrc(src: string, fallbackSlug: string): string {
+  if (!src) return slugToBigpic(fallbackSlug);
+  if (src.includes('/vv/bigpic/')) return src;  // already HD
+  if (src.includes('/vv/pics/')) {
+    // Extract filename: /vv/pics/samsung/samsung-galaxy-s26-ultra-1.jpg → samsung-galaxy-s26-ultra
+    const match = src.match(/\/vv\/pics\/[^/]+\/(.+)-\d+\.jpg$/);
+    if (match) {
+      return `https://fdn2.gsmarena.com/vv/bigpic/${match[1]}.jpg`;
+    }
+  }
+  // Can't derive bigpic — fall back to slug-based URL
+  return slugToBigpic(fallbackSlug);
+}
+
 export class ParserService {
 
   private async _parseStatsTable(captionText: string): Promise<IPhoneListItem[]> {
@@ -60,10 +83,13 @@ export class ParserService {
       const href = $(el).find('a').attr('href');
       if (href) {
         const listSlug = href.replace('.php', '');
+        const rawSrc = $(el).find('img').attr('src') || '';
+        const listBigpic = rawSrc ? toBigpicFromImgSrc(rawSrc, listSlug) : slugToBigpic(listSlug);
         phones.push({
           name: $(el).find('span').text().trim(),
           slug: listSlug,
-          imageUrl: slugToBigpic(listSlug),
+          imageUrl: listBigpic,
+          thumbUrl: rawSrc || undefined,
           detail_url: `/${listSlug}`,
         });
       }
@@ -81,10 +107,13 @@ export class ParserService {
       const href = $(el).find('a').attr('href');
       if (href) {
         const listSlug = href.replace('.php', '');
+        const rawSrc = $(el).find('img').attr('src') || '';
+        const listBigpic = rawSrc ? toBigpicFromImgSrc(rawSrc, listSlug) : slugToBigpic(listSlug);
         phones.push({
           name: $(el).find('span').text().trim(),
           slug: listSlug,
-          imageUrl: slugToBigpic(listSlug),
+          imageUrl: listBigpic,
+          thumbUrl: rawSrc || undefined,
           detail_url: `/${listSlug}`,
         });
       }
@@ -111,10 +140,15 @@ export class ParserService {
       if (href) {
         const name = $(el).find('span').html()?.split('<br>').join(' ').trim() || $(el).find('span').text().trim();
         const searchSlug = href.replace('.php', '');
+        // Read the actual img src from the page (always valid) then upgrade to bigpic.
+        // Fall back to slugToBigpic if no img found.
+        const rawImgSrc = $(el).find('img').attr('src') || '';
+        const bigpic = rawImgSrc ? toBigpicFromImgSrc(rawImgSrc, searchSlug) : slugToBigpic(searchSlug);
         phones.push({
           name: name,
           slug: searchSlug,
-          imageUrl: slugToBigpic(searchSlug),
+          imageUrl: bigpic,          // HD bigpic — may 404 for some phones
+          thumbUrl: rawImgSrc || undefined, // original thumbnail — always valid
           detail_url: `/${searchSlug}`,
         });
       }
