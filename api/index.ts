@@ -157,6 +157,47 @@ app.get('/review/:reviewSlug/images', async (request, reply) => {
  *   }
  * }
  */
+
+// Temporary debug endpoint for iQOO Z7 Pro camera samples investigation
+app.get('/debug-camera', async (request: any, reply: any) => {
+  const { getHtml } = await import('../src/parser/parser.service');
+  const { load } = await import('cheerio');
+  const results: any = {};
+
+  // Step 1: fetch opinions page
+  const opinionsUrl = 'https://www.gsmarena.com/vivo_iqoo_z7_pro_5g-opinions-11843.php';
+  try {
+    const html = await getHtml(opinionsUrl);
+    results.opinionsPageSize = html.length;
+    const $ = load(html);
+    const links: string[] = [];
+    $('a[href]').each((_: number, el: any) => {
+      const href: string = $(el).attr('href') || '';
+      links.push(href);
+    });
+    results.totalLinks = links.length;
+    results.cameraLinks = links.filter(h => 
+      h.toLowerCase().includes('camera') || h.toLowerCase().includes('news')
+    ).slice(0, 20);
+  } catch (e: any) {
+    results.opinionsError = e.message;
+  }
+
+  // Step 2: fetch camera page directly
+  const cameraUrl = 'https://www.gsmarena.com/vivo_iqoo_z7_pro_5g_camera_samples_specs-news-59639.php';
+  try {
+    const html = await getHtml(cameraUrl);
+    results.cameraPageSize = html.length;
+    const $ = load(html);
+    const imgs = $('img[src*="imgroot"]').toArray().map((el: any) => $(el).attr('src')).slice(0, 5);
+    results.cameraImages = imgs;
+  } catch (e: any) {
+    results.cameraPageError = e.message;
+  }
+
+  return results;
+});
+
 app.get('/phone', async (request, reply) => {
   const name = (request.query as any).name;
   if (!name) {
