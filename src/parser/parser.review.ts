@@ -484,7 +484,30 @@ async function scrapeLensDetails(cameraPageUrl: string): Promise<ILensDetail[]> 
 }
 
 export async function getReviewDetails(reviewSlug: string): Promise<IReviewResult> {
-  // Normalise to base slug (strip trailing pN)
+  // Detect if this is a news/camera-samples page (not a standard multi-page review)
+  // e.g. vivo_iqoo_z7_pro_5g_camera_samples_specs-news-59639
+  const isNewsPage = reviewSlug.includes('-news-') || reviewSlug.includes('camera_samples');
+
+  // For news/camera-samples pages, the page itself IS the camera page — no sub-pages
+  if (isNewsPage) {
+    const newsUrl = `${baseUrl}/${reviewSlug}.php`;
+    let newsHtml = '';
+    try { newsHtml = await getHtml(newsUrl); } catch { newsHtml = ''; }
+    const cameraSamples = newsHtml ? await scrapeCameraPage(newsUrl) : [];
+    const lensDetails = newsHtml ? await scrapeLensDetails(newsUrl) : [];
+    const firstLifestyle = lensDetails.find(l => l.sectionImageUrl)?.sectionImageUrl;
+    return {
+      device: reviewSlug,
+      reviewSlug,
+      reviewUrl: newsUrl,
+      heroImages: firstLifestyle ? [firstLifestyle] : [],
+      articleImages: [],
+      cameraSamples,
+      lensDetails,
+    };
+  }
+
+  // Standard review — normalise to base slug (strip trailing pN)
   const baseReviewSlug = reviewSlug.replace(/-review-(\d+)p\d+$/, '-review-$1');
   const reviewUrl = `${baseUrl}/${baseReviewSlug}.php`;
 

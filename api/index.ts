@@ -202,17 +202,16 @@ app.get('/phone', async (request, reply) => {
       // HD image priority:
       // 1. Lifestyle/inline photo from review (1200px, sharpest)
       // 2. Hero image from review page header
-      const firstLifestyle = lensDetails.find((l: any) => l.sectionImageUrl)?.sectionImageUrl;
-      const firstHero = reviewData.heroImages?.[0];
-      hdImageUrl = firstLifestyle || firstHero || null;
+      // Do NOT use lifestyle/scene photos as device image (they show the phone in a scene,
+      // not the clean product shot users expect to see).
+      // hdImageUrl stays null here — we use specs.imageUrl (bigpic) as the device photo.
     } catch {
       cameraSamples = [];
     }
   }
-  // If no HD image from review, use the specs page bigpic as-is (300px)
-  // It's blurry on high-DPI but better than nothing.
-  // The Android app will display it without further modification.
-  if (!hdImageUrl && specs.imageUrl) {
+  // Always use the specs page bigpic as hdImageUrl — this is the same URL shown
+  // in search results, so the image never changes when opening the detail screen.
+  if (specs.imageUrl) {
     hdImageUrl = specs.imageUrl;
   }
 

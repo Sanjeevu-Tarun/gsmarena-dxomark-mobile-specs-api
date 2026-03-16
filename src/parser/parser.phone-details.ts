@@ -89,6 +89,36 @@ export async function getPhoneDetails(slug: string): Promise<IPhoneDetails> {
       }
     });
 
+    // ── HD pictures page link ────────────────────────────────────────────────
+    // GSMArena specs pages link to a pictures gallery: {device}-pictures-{id}.php
+    // These contain full-resolution press photos (much sharper than bigpic ~300px)
+    let picturesPageUrl: string | undefined;
+    $(`a[href*="-pictures-"]`).each((_, el) => {
+      const href = ($(el).attr('href') || '');
+      if (href.includes('-pictures-') && href.endsWith('.php')) {
+        picturesPageUrl = href.startsWith('http') ? href : `${baseUrl}/${href}`;
+        return false; // take first match
+      }
+    });
+
+    // Scrape the first HD photo from the pictures gallery page
+    let hdImageUrl: string | undefined;
+    if (picturesPageUrl) {
+      try {
+        const picHtml = await getHtml(picturesPageUrl);
+        const $pic = cheerio.load(picHtml);
+        // Pictures pages have <div class="specs-photo-main"> with the full-res img
+        // or a gallery grid of images
+        const firstPic = $pic('.specs-photo-main a img, .gallery img, .photos-list img')
+          .first().attr('src');
+        if (firstPic && firstPic.includes('gsmarena.com')) {
+          hdImageUrl = firstPic;
+        }
+      } catch {
+        // pictures page failed — hdImageUrl stays undefined
+      }
+    }
+
     const release_date = $('span[data-spec="released-hl"]').text().trim();
     const dimensions = $('span[data-spec="body-hl"]').text().trim();
     const os = $('span[data-spec="os-hl"]').text().trim();
@@ -126,7 +156,7 @@ export async function getPhoneDetails(slug: string): Promise<IPhoneDetails> {
     return { 
       brand, 
       model, 
-      imageUrl,
+      imageUrl: hdImageUrl || imageUrl,  // HD press photo if available, else bigpic
       device_images,
       review_url,
       release_date, 
