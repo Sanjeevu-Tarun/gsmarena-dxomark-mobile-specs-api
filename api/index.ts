@@ -224,7 +224,7 @@ app.get('/phone', async (request, reply) => {
   };
 });
 
-// ── /:slug must be LAST – it's a catch-all for device specs ──────────────────
+// ── /:slug must be LAST –it's a catch-all for device specs ──────────────────
 app.get('/:slug', async (request) => {
   const slug = (request.params as any).slug;
   const data = await getPhoneDetails(slug);
