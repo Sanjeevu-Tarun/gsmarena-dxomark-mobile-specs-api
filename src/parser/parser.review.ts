@@ -1,22 +1,29 @@
 /**
  * parser.review.ts
  *
- * Scrapes a GSMArena review page and its camera-samples sub-page.
+ * Scrapes GSMArena review pages and camera sample sub-pages.
  *
- * Review URL pattern : https://www.gsmarena.com/<device>-review-<id>.php
- * Camera samples URL : https://www.gsmarena.com/<device>-review-<id>p<page>.php
+ * GSMArena review structure for e.g. Samsung Galaxy S26 Ultra:
+ *   Page 1 (base):  samsung_galaxy_s26_ultra-review-2939.php       ← overview / TOC
+ *   Page 2:         samsung_galaxy_s26_ultra-review-2939p2.php      ← Design
+ *   Page 3:         samsung_galaxy_s26_ultra-review-2939p3.php      ← Lab Tests
+ *   Page 4:         samsung_galaxy_s26_ultra-review-2939p4.php      ← Software & Performance
+ *   Page 5:         samsung_galaxy_s26_ultra-review-2939p5.php      ← Camera (samples!)
+ *   Page 6:         samsung_galaxy_s26_ultra-review-2939p6.php      ← Verdict
  *
- * The camera-samples section has multiple "tabs" / categories.
- * Each tab is linked from the review page with a URL like:
- *   …review-<id>p2.php  (Daylight)
- *   …review-<id>p3.php  (Low light / Night)
- *   …review-<id>p4.php  (Zoom)
- *   …review-<id>p5.php  (Selfie)
- *   …review-<id>p6.php  (Video)
- * etc.
+ * Camera samples live ONLY on the camera page (p5 in this case).
+ * Within that page, each category (Main, Zoom, Night, Selfie, Video…) is a
+ * separate <section> or <div> identified by a heading/tab label.
  *
- * Because GSMArena does not guarantee a fixed page-number ↔ category mapping,
- * we discover them dynamically from the tab links on the review page itself.
+ * Images on camera sample pages use this pattern:
+ *   <li>
+ *     <img src="…/thumb_small.jpg" data-src="…/thumb.jpg" alt="caption …">
+ *   </li>
+ * The full-resolution image URL is derived by replacing the thumb size token
+ * in the CDN path:  /-160/  →  /-/-  (original) or /-1200/
+ *
+ * The lightbox href on camera sample pages is always "#" — we MUST derive
+ * the full-res URL from the thumbnail src, not the anchor href.
  */
 
 import * as cheerio from 'cheerio';
@@ -29,9 +36,9 @@ import {
   IReviewGallerySection,
 } from '../types';
 
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
 // Helpers
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
 
 function absoluteUrl(href: string): string {
   if (!href) return '';
@@ -45,39 +52,203 @@ function cleanImgUrl(src: string | undefined): string {
 }
 
 /**
+ * Derive full-resolution image URL from a GSMArena thumbnail URL.
+ *
+ * GSMArena CDN pattern (confirmed from live page):
+ *   thumb:    https://fdn.gsmarena.com/imgroot/reviews/26/<device>/camera/-160/gsmarena_1101.jpg
+ *   full-res: https://fdn.gsmarena.com/imgroot/reviews/26/<device>/camera/-/-/gsmarena_1101.jpg
+ *
+ *   The size token (/-160/, /-216/, /-320/, /-1200/, /-1200w5/) is replaced with /-/-/
+ */
+function thumbToFullRes(thumbUrl: string): string {
+  if (!thumbUrl) return '';
+  // Replace any size segment like /-160/ or /-1200w5/ with /-/-/
+  const full = thumbUrl.replace(/\/-[\dw]+\//, '/-\/-\/');
+  return full;
+}
+
+/**
+ * Decide whether a URL is a real content image (not a store badge, logo, icon,
+ * competitor thumbnail from a comparison widget, spacer, etc.).
+ */
+function isContentImage(src: string): boolean {
+  if (!src || src === '#' || src.includes('www.gsmarena.com/#')) return false;
+  // Store/shop logos
+  if (/\/static\/stores\//.test(src)) return false;
+  // Tiny icons / spacers
+  if (/icon|logo|spacer|blank|pixel\.gif|arrow/.test(src)) return false;
+  // Must be from the GSMArena CDN or fdn domain
+  if (!src.includes('gsmarena.com') && !src.includes('fdn.gsmarena') && !src.includes('fdn2.gsmarena')) return false;
+  return true;
+}
+
+/**
+ * Is this image URL a camera sample (lives under /imgroot/reviews/…/camera/)?
+ * These are the real camera samples — lifestyle/phone/sshots are article images.
+ */
+function isCameraSampleImage(src: string): boolean {
+  return src.includes('/imgroot/reviews/') && src.includes('/camera/');
+}
+
+/**
  * Normalise a raw tab / heading label into a canonical category string.
- * e.g.  "Main cam"  →  "Main Camera"
- *       "low light" →  "Night / Low Light"
  */
 function normaliseCategory(raw: string): string {
   const s = raw.trim();
   if (!s) return 'Unknown';
-
   const lower = s.toLowerCase();
-  if (/selfie|front/.test(lower)) return 'Selfie';
+  if (/selfie|front.?cam/.test(lower)) return 'Selfie';
   if (/night|low.?light/.test(lower)) return 'Night / Low Light';
-  if (/zoom|tele/.test(lower)) return 'Zoom';
-  if (/video/.test(lower)) return 'Video';
+  if (/\bzoom\b|tele/.test(lower)) return 'Zoom';
+  if (/\bvideo\b/.test(lower)) return 'Video';
   if (/portrait/.test(lower)) return 'Portrait';
-  if (/wide|ultra.?wide/.test(lower)) return 'Ultra-Wide';
-  if (/daylight|outdoor|main/.test(lower)) return 'Main Camera';
-  if (/indoor/.test(lower)) return 'Indoor';
-  if (/macro/.test(lower)) return 'Macro';
+  if (/ultra.?wide|ultrawide/.test(lower)) return 'Ultra-Wide';
+  if (/\bwide\b/.test(lower)) return 'Wide';
+  if (/daylight|main.?cam|main camera/.test(lower)) return 'Main Camera';
+  if (/\bindoor\b/.test(lower)) return 'Indoor';
+  if (/\bmacro\b/.test(lower)) return 'Macro';
   if (/sample/.test(lower)) return 'Camera Samples';
-
-  // Title-case the raw label as fallback
-  return s.replace(/\b\w/g, c => c.toUpperCase());
+  // Numbered headings like "5. Camera" → "Camera"
+  const stripped = s.replace(/^\d+\.\s*/, '');
+  return stripped.replace(/\b\w/g, c => c.toUpperCase());
 }
 
-// ---------------------------------------------------------------------------
-// Camera-samples page scraper
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// Find the camera page number
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Scrape all sample images from a single camera-samples sub-page.
- * Images live in  .camera-sample  or  #sample-photos  containers.
+ * Fetch the base review page and find the page number of the camera/samples section.
+ * Returns the page number (e.g. 5) or null if not found.
  */
-async function scrapeSamplesPage(url: string, label: string): Promise<ICameraSample[]> {
+async function findCameraPageNumber(baseReviewSlug: string, reviewId: string): Promise<number | null> {
+  const reviewUrl = `${baseUrl}/${baseReviewSlug}.php`;
+  let html: string;
+  try {
+    html = await getHtml(reviewUrl);
+  } catch {
+    return null;
+  }
+
+  const $ = cheerio.load(html);
+
+  // Look for nav links pointing to pN pages and find the one labelled "camera"
+  let cameraPage: number | null = null;
+
+  $(`a[href*="-review-${reviewId}p"]`).each((_, el) => {
+    const href = $(el).attr('href') || '';
+    const text = $(el).text().trim().toLowerCase();
+    const match = href.match(/-review-\d+p(\d+)\.php/);
+    if (!match) return;
+    const pageNum = parseInt(match[1], 10);
+    if (/camera|photo|sample/.test(text)) {
+      cameraPage = pageNum;
+    }
+  });
+
+  // Fallback: probe pages 2–8 and return the first one that has camera sample images
+  if (cameraPage === null) {
+    for (let p = 2; p <= 8; p++) {
+      const url = `${baseUrl}/${baseReviewSlug}p${p}.php`;
+      try {
+        const pageHtml = await getHtml(url);
+        const $p = cheerio.load(pageHtml);
+        // Camera sample pages have images under /camera/ path
+        let hasCameraSamples = false;
+        $p('img').each((_, img) => {
+          const src = $p(img).attr('src') || $p(img).attr('data-src') || '';
+          if (isCameraSampleImage(src)) { hasCameraSamples = true; }
+        });
+        if (hasCameraSamples) {
+          cameraPage = p;
+          break;
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  return cameraPage;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Scrape camera samples from the camera page
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Extract camera category from alt/caption text.
+ *
+ * GSMArena captions follow this pattern (confirmed from live page):
+ *   "Daylight samples, main camera (1x) - 23mm, f/1.4, ISO 64, 1/3889s ..."
+ *   "Daylight samples, main camera (2x) - ..."
+ *   "Daylight samples, telephoto camera (3x) - ..."
+ *   "Daylight samples, telephoto camera (5x) - ..."
+ *   "Low-light samples, main camera (1x) - ..."
+ *   "Low-light samples, telephoto camera (3x) - ..."
+ *   "Selfie camera samples - ..."
+ *   "Video samples - ..."
+ *   "Ultrawide samples - ..."
+ *   "Human subjects, main camera (1x): Photo mode - ..."
+ *   "Daylight comparison, main camera (1x): Galaxy S26 Ultra - ..."
+ *
+ * We parse these to produce clean category labels.
+ */
+function categoryFromCaption(caption: string): string {
+  const c = caption.toLowerCase();
+
+  // Selfie
+  if (/selfie/.test(c)) return 'Selfie';
+
+  // Video
+  if (/\bvideo\b/.test(c)) return 'Video';
+
+  // Low-light / Night
+  if (/low.?light|night/.test(c)) {
+    if (/telephoto.*3x|3x.*telephoto/.test(c)) return 'Night / Low Light — 3x Zoom';
+    if (/telephoto.*5x|5x.*telephoto/.test(c)) return 'Night / Low Light — 5x Zoom';
+    if (/ultrawide|ultra.?wide/.test(c)) return 'Night / Low Light — Ultra-Wide';
+    if (/front|selfie/.test(c)) return 'Night / Low Light — Selfie';
+    return 'Night / Low Light';
+  }
+
+  // Ultra-wide
+  if (/ultrawide|ultra.?wide/.test(c)) return 'Ultra-Wide';
+
+  // Zoom levels — telephoto
+  if (/telephoto.*10x|10x.*telephoto/.test(c)) return 'Zoom — 10x';
+  if (/telephoto.*5x|5x.*telephoto/.test(c)) return 'Zoom — 5x';
+  if (/telephoto.*3x|3x.*telephoto/.test(c)) return 'Zoom — 3x';
+  if (/telephoto/.test(c)) return 'Zoom';
+
+  // Main camera zoom levels
+  if (/main.*2x|2x.*main/.test(c)) return 'Main Camera — 2x';
+  if (/main.*camera|main.*cam/.test(c)) return 'Main Camera';
+
+  // Daylight fallback
+  if (/daylight/.test(c)) return 'Main Camera';
+
+  // Human subjects — map to correct camera
+  if (/human subject/.test(c)) {
+    if (/3x/.test(c)) return 'Zoom — 3x';
+    if (/5x/.test(c)) return 'Zoom — 5x';
+    if (/2x/.test(c)) return 'Main Camera — 2x';
+    return 'Main Camera';
+  }
+
+  return 'Camera Samples';
+}
+
+/**
+ * Scrape all classified camera samples from the camera review sub-page.
+ *
+ * Key facts (confirmed from live GSMArena p5 page):
+ * - All <a> hrefs are "#" (lightbox) — NEVER use the anchor href as image URL
+ * - Thumbnail src pattern: /imgroot/reviews/26/<device>/camera/-160/gsmarena_XXXX.jpg
+ * - Full-res pattern:       /imgroot/reviews/26/<device>/camera/-/-/gsmarena_XXXX.jpg
+ * - Category is determined from the <img alt="..."> caption text
+ */
+async function scrapeCameraPage(url: string): Promise<ICameraSampleCategory[]> {
   let html: string;
   try {
     html = await getHtml(url);
@@ -86,69 +257,125 @@ async function scrapeSamplesPage(url: string, label: string): Promise<ICameraSam
   }
 
   const $ = cheerio.load(html);
-  const samples: ICameraSample[] = [];
+  const categoryMap = new Map<string, ICameraSample[]>();
   const seen = new Set<string>();
 
-  function pushSample(imgUrl: string, caption: string, thumbUrl?: string) {
-    if (!imgUrl || seen.has(imgUrl)) return;
-    seen.add(imgUrl);
-    samples.push({
+  $('img').each((_, el) => {
+    const src = $(el).attr('src') || $(el).attr('data-src') || '';
+    // Only process real camera sample images (under /camera/ path)
+    if (!isCameraSampleImage(src)) return;
+
+    const thumbUrl = cleanImgUrl(src);
+    const fullUrl = thumbToFullRes(thumbUrl);
+    if (!fullUrl || seen.has(fullUrl)) return;
+    seen.add(fullUrl);
+
+    const caption = $(el).attr('alt') || '';
+    const label = categoryFromCaption(caption);
+
+    if (!categoryMap.has(label)) categoryMap.set(label, []);
+    categoryMap.get(label)!.push({
       category: label,
-      url: imgUrl,
+      url: fullUrl,
       thumbnailUrl: thumbUrl,
       caption: caption || undefined,
     });
-  }
-
-  // ── Pattern 1: .camera-sample ul li ──────────────────────────────────────
-  $('.camera-sample ul li, .camera-samples ul li, #camera-sample ul li').each((_, el) => {
-    const a = $(el).find('a');
-    const img = $(el).find('img');
-    const href = a.attr('href');
-    const src = img.attr('src') || img.attr('data-src') || '';
-    const caption = img.attr('alt') || a.attr('title') || '';
-    const fullUrl = href ? absoluteUrl(href) : cleanImgUrl(src);
-    const thumbUrl = src ? cleanImgUrl(src) : undefined;
-    pushSample(fullUrl, caption, thumbUrl);
   });
 
-  // ── Pattern 2: #sample-photos / .sample-photos div ───────────────────────
-  if (samples.length === 0) {
-    $('#sample-photos img, .sample-photos img, .review-photos img').each((_, el) => {
-      const src = $(el).attr('src') || $(el).attr('data-src') || '';
-      const caption = $(el).attr('alt') || '';
-      const parentHref = $(el).parent('a').attr('href');
-      const fullUrl = parentHref ? absoluteUrl(parentHref) : cleanImgUrl(src);
-      pushSample(fullUrl, caption, cleanImgUrl(src) || undefined);
-    });
-  }
+  // Convert map to array and sort in a logical order
+  const order = [
+    'Main Camera', 'Main Camera — 2x',
+    'Ultra-Wide',
+    'Zoom — 3x', 'Zoom — 5x', 'Zoom — 10x', 'Zoom',
+    'Portrait',
+    'Night / Low Light', 'Night / Low Light — 3x Zoom', 'Night / Low Light — 5x Zoom',
+    'Night / Low Light — Ultra-Wide', 'Night / Low Light — Selfie',
+    'Selfie',
+    'Video',
+    'Camera Samples',
+  ];
 
-  // ── Pattern 3: Generic article images (fallback) ─────────────────────────
-  if (samples.length === 0) {
-    $('article img, .review-body img, .gsmarena-article img, .article img').each((_, el) => {
-      const src = $(el).attr('src') || $(el).attr('data-src') || '';
-      if (!src || src.includes('icon') || src.includes('logo')) return;
-      const caption = $(el).attr('alt') || '';
-      const parentHref = $(el).parent('a').attr('href');
-      const fullUrl = parentHref ? absoluteUrl(parentHref) : cleanImgUrl(src);
-      pushSample(fullUrl, caption, cleanImgUrl(src) || undefined);
-    });
+  const categories: ICameraSampleCategory[] = [];
+  for (const [label, images] of categoryMap.entries()) {
+    categories.push({ label, images });
   }
+  categories.sort((a, b) => {
+    const ai = order.indexOf(a.label), bi = order.indexOf(b.label);
+    if (ai === -1 && bi === -1) return a.label.localeCompare(b.label);
+    if (ai === -1) return 1; if (bi === -1) return -1;
+    return ai - bi;
+  });
 
-  return samples;
+  return categories;
 }
 
-// ---------------------------------------------------------------------------
-// Review page main scraper
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// Scrape article images (non-camera-sample pages)
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function scrapeArticleImages(slug: string, pageNum: number): Promise<IReviewGallerySection[]> {
+  const url = pageNum === 1
+    ? `${baseUrl}/${slug}.php`
+    : `${baseUrl}/${slug}p${pageNum}.php`;
+
+  let html: string;
+  try { html = await getHtml(url); } catch { return []; }
+
+  const $ = cheerio.load(html);
+  const sections: IReviewGallerySection[] = [];
+  const seen = new Set<string>();
+  let currentSection = 'Introduction';
+
+  $('article *, .review-container *, .gsmarena-article *').each((_, el) => {
+    const tag = ((el as any).tagName || '').toLowerCase();
+    if (/^h[1-6]$/.test(tag)) {
+      const text = $(el).text().trim();
+      if (text) currentSection = text;
+      return;
+    }
+    if (tag !== 'img') return;
+
+    const src = cleanImgUrl($(el).attr('src') || $(el).attr('data-src'));
+    if (!isContentImage(src)) return;
+    if (isCameraSampleImage(src)) return;
+    // Skip competitor device images (bigpic), store logos, static assets
+    if (/\/bigpic\/|\/static\/|\/vv\/bigpic\//.test(src)) return;
+    if (seen.has(src)) return;
+    seen.add(src);
+
+    const caption = $(el).attr('alt') || $(el).attr('title') || '';
+    // Never use "#" as URL — use the img src itself as the full URL
+    const parentHref = $(el).parent('a').attr('href');
+    const fullUrl = (parentHref && !parentHref.includes('#') && parentHref.startsWith('http'))
+      ? parentHref
+      : src;
+
+    let section = sections.find(s => s.section === currentSection);
+    if (!section) { section = { section: currentSection, images: [] }; sections.push(section); }
+    section.images.push({
+      category: normaliseCategory(currentSection),
+      url: fullUrl,
+      thumbnailUrl: src !== fullUrl ? src : undefined,
+      caption: caption || undefined,
+    });
+  });
+
+  return sections;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main exported function
+// ─────────────────────────────────────────────────────────────────────────────
 
 export async function getReviewDetails(reviewSlug: string): Promise<IReviewResult> {
-  // reviewSlug is the full slug including "-review-NNNNpX" suffix
-  // e.g.  samsung_galaxy_s26_ultra-review-2939p5
-  // We normalise to the first page (p1 or no suffix) for the main review
+  // Normalise to base slug (strip trailing pN)
   const baseReviewSlug = reviewSlug.replace(/-review-(\d+)p\d+$/, '-review-$1');
   const reviewUrl = `${baseUrl}/${baseReviewSlug}.php`;
 
+  const reviewIdMatch = baseReviewSlug.match(/-review-(\d+)$/);
+  const reviewId = reviewIdMatch ? reviewIdMatch[1] : '';
+
+  // Fetch base page for device name + hero images
   let html: string;
   try {
     html = await getHtml(reviewUrl);
@@ -158,130 +385,36 @@ export async function getReviewDetails(reviewSlug: string): Promise<IReviewResul
 
   const $ = cheerio.load(html);
 
-  // ── Device name ────────────────────────────────────────────────────────────
   const device =
-    $('h1.article-info-name').text().trim() ||
-    $('h1').first().text().trim() ||
+    $('h1.article-info-name, h1.review-header-title, h1').first().text().trim() ||
     baseReviewSlug;
 
-  // ── Hero images ────────────────────────────────────────────────────────────
+  // Hero images — only from header area, not article body
   const heroImages: string[] = [];
   const heroSeen = new Set<string>();
-  $('.article-info-top img, .review-header img, .article-header img, header img').each((_, el) => {
+  $('.article-info-top img, .review-header img, .article-header img').each((_, el) => {
     const src = cleanImgUrl($(el).attr('src') || $(el).attr('data-src'));
-    if (src && !heroSeen.has(src)) { heroSeen.add(src); heroImages.push(src); }
-  });
-
-  // ── Discover camera-sample tab links ──────────────────────────────────────
-  //
-  // GSMArena renders nav tabs inside  .article-nav  or  .review-nav  or as
-  // plain <a> links whose href matches …-review-NNNNpX.php
-  //
-  const reviewIdMatch = baseReviewSlug.match(/-review-(\d+)$/);
-  const reviewId = reviewIdMatch ? reviewIdMatch[1] : '';
-
-  interface TabLink { label: string; url: string }
-  const tabLinks: TabLink[] = [];
-  const tabSeen = new Set<string>();
-
-  // Strategy A – explicit nav tabs
-  $('a[href*="-review-"]').each((_, el) => {
-    const href = $(el).attr('href') || '';
-    // Must reference the same review id and have a page suffix pN
-    if (reviewId && !href.includes(`-review-${reviewId}p`)) return;
-    const url = absoluteUrl(href);
-    if (tabSeen.has(url)) return;
-    tabSeen.add(url);
-    const rawLabel =
-      $(el).text().trim() ||
-      $(el).attr('title') ||
-      $(el).find('span').text().trim() ||
-      '';
-    tabLinks.push({ label: normaliseCategory(rawLabel || 'Camera Samples'), url });
-  });
-
-  // Strategy B – if no tabs found but we know the review ID, probe common page numbers
-  if (tabLinks.length === 0 && reviewId) {
-    const commonPages = [
-      { page: 2, label: 'Main Camera' },
-      { page: 3, label: 'Night / Low Light' },
-      { page: 4, label: 'Zoom' },
-      { page: 5, label: 'Selfie' },
-      { page: 6, label: 'Video' },
-      { page: 7, label: 'Ultra-Wide' },
-    ];
-    for (const { page, label } of commonPages) {
-      const url = `${baseUrl}/${baseReviewSlug}p${page}.php`;
-      tabLinks.push({ label, url });
+    if (src && isContentImage(src) && !heroSeen.has(src)) {
+      heroSeen.add(src);
+      heroImages.push(src);
     }
+  });
+
+  // Find which page has camera samples
+  const cameraPageNum = await findCameraPageNumber(baseReviewSlug, reviewId);
+
+  // Scrape camera samples from the camera page
+  let cameraSamples: ICameraSampleCategory[] = [];
+  if (cameraPageNum) {
+    const cameraUrl = `${baseUrl}/${baseReviewSlug}p${cameraPageNum}.php`;
+    cameraSamples = await scrapeCameraPage(cameraUrl);
   }
 
-  // ── Scrape each tab in parallel ────────────────────────────────────────────
-  const cameraSamples: ICameraSampleCategory[] = [];
-
-  await Promise.all(
-    tabLinks.map(async ({ label, url }) => {
-      const images = await scrapeSamplesPage(url, label);
-      if (images.length > 0) {
-        cameraSamples.push({ label, images });
-      }
-    })
-  );
-
-  // Sort tabs in a sensible order
-  const categoryOrder = [
-    'Main Camera', 'Daylight', 'Ultra-Wide', 'Zoom', 'Portrait',
-    'Indoor', 'Night / Low Light', 'Selfie', 'Macro', 'Video',
-  ];
-  cameraSamples.sort((a, b) => {
-    const ai = categoryOrder.indexOf(a.label);
-    const bi = categoryOrder.indexOf(b.label);
-    if (ai === -1 && bi === -1) return a.label.localeCompare(b.label);
-    if (ai === -1) return 1;
-    if (bi === -1) return -1;
-    return ai - bi;
-  });
-
-  // ── In-article images grouped by nearest heading ───────────────────────────
+  // Scrape article images from non-camera pages (p1, p2, p3, p4 etc.)
   const articleImages: IReviewGallerySection[] = [];
-  const articleSeen = new Set<string>();
-  let currentSection = 'Introduction';
-
-  $('article *, .review-body *, .gsmarena-article *').each((_, el) => {
-    const tag = (el as any).tagName?.toLowerCase();
-    if (!tag) return;
-
-    // Section heading detection
-    if (/^h[1-6]$/.test(tag)) {
-      const text = $(el).text().trim();
-      if (text) currentSection = text;
-      return;
-    }
-
-    // Image elements
-    if (tag === 'img') {
-      const src = cleanImgUrl($(el).attr('src') || $(el).attr('data-src'));
-      if (!src || src.includes('icon') || src.includes('logo') || src.includes('spacer')) return;
-      if (articleSeen.has(src)) return;
-      articleSeen.add(src);
-
-      const caption = $(el).attr('alt') || $(el).attr('title') || '';
-      const parentHref = $(el).parent('a').attr('href');
-      const fullUrl = parentHref ? absoluteUrl(parentHref) : src;
-
-      let section = articleImages.find(s => s.section === currentSection);
-      if (!section) {
-        section = { section: currentSection, images: [] };
-        articleImages.push(section);
-      }
-      section.images.push({
-        category: normaliseCategory(currentSection),
-        url: fullUrl,
-        thumbnailUrl: src !== fullUrl ? src : undefined,
-        caption: caption || undefined,
-      });
-    }
-  });
+  // Just scrape p1 (overview) for article images to keep response lean
+  const p1Sections = await scrapeArticleImages(baseReviewSlug, 1);
+  articleImages.push(...p1Sections);
 
   return {
     device,
