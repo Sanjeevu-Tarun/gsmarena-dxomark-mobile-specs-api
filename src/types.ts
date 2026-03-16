@@ -73,6 +73,16 @@ export interface IReviewDetails {
     cameraSamples: ICameraSampleCategory[];
 }
 
+/** A parsed lens detail from the article-blurb-findings list */
+export interface ILensDetail {
+    /** e.g. "Wide (main)", "Telephoto 3.5x", "Ultrawide", "Front camera" */
+    role: string;
+    /** Full detail text e.g. "50MP Sony Lytia LYT-828 (1/1.28"), f/1.57, 24mm, OIS; 4K@120" */
+    detail: string;
+    /** First inline-image found in the same camera section, used as representative thumbnail */
+    sectionImageUrl?: string;
+}
+
 /** One tab from the camera samples section */
 export interface ICameraSampleCategory {
     /** e.g. "Main Camera", "Selfie", "Zoom 3x", "Night mode", "Video" */
@@ -88,5 +98,7 @@ export interface IReviewResult {
     heroImages: string[];
     articleImages: IReviewGallerySection[];
     cameraSamples: ICameraSampleCategory[];
+    /** Lens details parsed from article-blurb-findings list on the camera review page */
+    lensDetails: ILensDetail[];
 }
   
