@@ -190,6 +190,7 @@ app.get('/phone', async (request, reply) => {
   // Step 3 – if review URL exists, scrape camera samples
   let cameraSamples: any[] = [];
   let lensDetails: any[] = [];
+  let hdImageUrl: string | null = null;
   if (specs.review_url) {
     try {
       // Extract slug from full URL:  https://www.gsmarena.com/FOO-review-NNNNpX.php  →  FOO-review-NNNNpX
@@ -199,6 +200,13 @@ app.get('/phone', async (request, reply) => {
       const reviewData = await getReviewDetails(reviewSlug);
       cameraSamples = reviewData.cameraSamples;
       lensDetails = reviewData.lensDetails ?? [];
+      // Pick the best HD device image from the review page:
+      // 1. First lensDetails sectionImageUrl (lifestyle photo, 1200px)
+      // 2. First heroImage from review page header
+      // 3. Falls back to specs page bigpic
+      const firstLifestyle = lensDetails.find((l: any) => l.sectionImageUrl)?.sectionImageUrl;
+      const firstHero = reviewData.heroImages?.[0];
+      hdImageUrl = firstLifestyle || firstHero || null;
     } catch {
       cameraSamples = [];
     }
@@ -209,6 +217,7 @@ app.get('/phone', async (request, reply) => {
     matched: bestMatch.name,
     data: {
       ...specs,
+      hdImageUrl,        // 1200px lifestyle/hero image from review page
       cameraSamples,
       lensDetails,
     },
