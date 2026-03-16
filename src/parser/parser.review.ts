@@ -25,9 +25,8 @@ function cleanImgUrl(src: string | undefined): string {
 
 function thumbToFullRes(thumbUrl: string): string {
   if (!thumbUrl) return '';
-  // Strip the size token: /-160/ or /-216/ etc → /
-  // Thumbnail: .../camera/-160/gsmarena_1101.jpg
-  // Full-res:  .../camera/gsmarena_1101.jpg
+  // Strip size token: /-160/ or /-216/ etc → /
+  // e.g. .../camera/-160/gsmarena_1101.jpg → .../camera/gsmarena_1101.jpg
   return thumbUrl.replace(/\/-[0-9]+w?[0-9]*\//, '/');
 }
 
@@ -165,8 +164,7 @@ async function scrapeCameraPage(url: string): Promise<ICameraSampleCategory[]> {
     const src = $(el).attr('src') || $(el).attr('data-src') || '';
     if (!isCameraSampleImage(src)) return;
 
-    const thumbUrl = cleanImgUrl(src);
-    const fullUrl = thumbToFullRes(thumbUrl);
+    const fullUrl = thumbToFullRes(cleanImgUrl(src));
     if (!fullUrl || seen.has(fullUrl)) return;
     seen.add(fullUrl);
 
@@ -179,7 +177,6 @@ async function scrapeCameraPage(url: string): Promise<ICameraSampleCategory[]> {
     categoryMap.get(label)!.push({
       category: label,
       url: fullUrl,
-      thumbnailUrl: thumbUrl,
       caption: caption || undefined,
     });
   });
@@ -252,7 +249,6 @@ async function scrapeArticleImages(slug: string, pageNum: number): Promise<IRevi
     section.images.push({
       category: normaliseCategory(currentSection),
       url: fullUrl,
-      thumbnailUrl: src !== fullUrl ? src : undefined,
       caption: caption || undefined,
     });
   });
