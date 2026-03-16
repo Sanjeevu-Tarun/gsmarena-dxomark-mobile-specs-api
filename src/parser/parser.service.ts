@@ -3,6 +3,15 @@ import * as cheerio from 'cheerio';
 import { IPhoneListItem, ISearchResult } from '../types';
 import { baseUrl } from '../server';
 
+
+/** Convert a GSMArena slug to the HD bigpic image URL.
+ *  e.g. "samsung_galaxy_s26_ultra" → "https://fdn2.gsmarena.com/vv/bigpic/samsung-galaxy-s26-ultra.jpg"
+ *  This is the largest device image GSMArena publicly serves (~400px wide).
+ */
+function slugToBigpic(slug: string): string {
+  return `https://fdn2.gsmarena.com/vv/bigpic/${slug.replace(/\.php$/, '').replace(/_/g, '-').toLowerCase()}.jpg`;
+}
+
 export async function getHtml(url: string): Promise<string> {
   const { data } = await axios.get(url, {
     headers: {
@@ -50,11 +59,12 @@ export class ParserService {
     $('.makers ul li').each((_, el) => {
       const href = $(el).find('a').attr('href');
       if (href) {
+        const listSlug = href.replace('.php', '');
         phones.push({
           name: $(el).find('span').text().trim(),
-          slug: href.replace('.php', ''),
-          imageUrl: $(el).find('img').attr('src'),
-          detail_url: `/${href.replace('.php', '')}`,
+          slug: listSlug,
+          imageUrl: slugToBigpic(listSlug),
+          detail_url: `/${listSlug}`,
         });
       }
     });
@@ -70,11 +80,12 @@ export class ParserService {
     $('.makers ul li').each((_, el) => {
       const href = $(el).find('a').attr('href');
       if (href) {
+        const listSlug = href.replace('.php', '');
         phones.push({
           name: $(el).find('span').text().trim(),
-          slug: href.replace('.php', ''),
-          imageUrl: $(el).find('img').attr('src'),
-          detail_url: `/${href.replace('.php', '')}`,
+          slug: listSlug,
+          imageUrl: slugToBigpic(listSlug),
+          detail_url: `/${listSlug}`,
         });
       }
     });
@@ -99,11 +110,12 @@ export class ParserService {
       const href = $(el).find('a').attr('href');
       if (href) {
         const name = $(el).find('span').html()?.split('<br>').join(' ').trim() || $(el).find('span').text().trim();
+        const searchSlug = href.replace('.php', '');
         phones.push({
           name: name,
-          slug: href.replace('.php', ''),
-          imageUrl: $(el).find('img').attr('src'),
-          detail_url: `/${href.replace('.php', '')}`,
+          slug: searchSlug,
+          imageUrl: slugToBigpic(searchSlug),
+          detail_url: `/${searchSlug}`,
         });
       }
     });

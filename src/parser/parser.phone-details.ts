@@ -12,7 +12,18 @@ export async function getPhoneDetails(slug: string): Promise<IPhoneDetails> {
     const model = $('h1.specs-phone-name-title').contents().filter(function () {
         return this.type === 'text';
       }).text().trim();
-    const imageUrl = $('.specs-photo-main a img').attr('src');
+    // Primary device image — GSMArena specs pages serve this as the bigpic URL directly
+    // e.g. https://fdn2.gsmarena.com/vv/bigpic/apple-iphone-17-pro-max.jpg
+    let imageUrl = $('.specs-photo-main a img').attr('src')
+      || $('.specs-photo-main img').attr('src')
+      || $('.specs-photo img').attr('src');
+    // Ensure it is the bigpic version — upgrade any small /vv/pics/ URLs
+    if (imageUrl && imageUrl.includes('/vv/pics/')) {
+      // /vv/pics/apple/apple-iphone-17-pro-max-1.jpg → /vv/bigpic/apple-iphone-17-pro-max.jpg
+      imageUrl = imageUrl
+        .replace(/\/vv\/pics\/[^/]+\//, '/vv/bigpic/')
+        .replace(/-\d+\.jpg$/, '.jpg');
+    }
 
     // ── Device colour images ──────────────────────────────────────────────────
     const device_images: IDeviceImage[] = [];
