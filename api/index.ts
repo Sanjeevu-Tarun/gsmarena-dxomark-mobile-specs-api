@@ -641,6 +641,58 @@ app.get('/debug', async (request) => {
   return { ok: true, url: request.url, method: request.method };
 });
 
+// Redis connectivity test
+app.get('/debug/redis', async (_request, reply) => {
+  const url   = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+
+  if (!url || !token) {
+    return reply.status(500).send({
+      ok: false,
+      error: 'Env vars missing',
+      UPSTASH_REDIS_REST_URL: url ? '✅ set' : '❌ missing',
+      UPSTASH_REDIS_REST_TOKEN: token ? '✅ set' : '❌ missing',
+    });
+  }
+
+  const testKey = 'gsm:debug:ping';
+  const testVal = { ping: 'pong', ts: Date.now() };
+  const results: any = {
+    UPSTASH_REDIS_REST_URL: url.slice(0, 40) + '...',
+    UPSTASH_REDIS_REST_TOKEN: token.slice(0, 8) + '...',
+  };
+
+  // Test SET
+  try {
+    const axios = (await import('axios')).default;
+    const setResp = await axios.post(
+      `${url}/pipeline`,
+      [['SET', testKey, JSON.stringify(testVal), 'EX', 60]],
+      { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, timeout: 10000 }
+    );
+    results.set = { status: setResp.status, data: setResp.data };
+  } catch (e: any) {
+    results.set = { error: e.message, code: e.code, response: e.response?.data };
+  }
+
+  // Test GET
+  try {
+    const axios = (await import('axios')).default;
+    const getResp = await axios.get(
+      `${url}/get/${encodeURIComponent(testKey)}`,
+      { headers: { Authorization: `Bearer ${token}` }, timeout: 10000 }
+    );
+    const parsed = getResp.data?.result ? JSON.parse(getResp.data.result) : null;
+    results.get = { status: getResp.status, value: parsed };
+    results.ok = parsed?.ping === 'pong';
+  } catch (e: any) {
+    results.get = { error: e.message, code: e.code, response: e.response?.data };
+    results.ok = false;
+  }
+
+  return results;
+});
+
 app.get('/brands', async () => {
   const data = await getBrands();
   return { status: true, data };
