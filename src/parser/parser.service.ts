@@ -2,52 +2,51 @@ import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { IPhoneListItem, ISearchResult } from '../types';
 import { baseUrl } from '../server';
+import { cacheGet, cacheSet } from '../cache';
 
-
-/** Convert a GSMArena slug to the HD bigpic image URL.
- *  e.g. "samsung_galaxy_s26_ultra" → "https://fdn2.gsmarena.com/vv/bigpic/samsung-galaxy-s26-ultra.jpg"
- *  This is the largest device image GSMArena publicly serves (~400px wide).
- */
+/** Convert a GSMArena slug to the HD bigpic image URL. */
 function slugToBigpic(slug: string): string {
   return `https://fdn2.gsmarena.com/vv/bigpic/${slug.replace(/\.php$/, '').replace(/_/g, '-').toLowerCase()}.jpg`;
 }
 
 export async function getHtml(url: string): Promise<string> {
+  const ck = `gsm:html:v1:${url}`;
+  const cached = await cacheGet<string>(ck);
+  if (cached) return cached;
+
   const { data } = await axios.get(url, {
     headers: {
       'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     },
   });
+  cacheSet(ck, data);
   return data;
 }
 
 /**
  * Given an actual GSMArena thumbnail src from the page, extract the device name
  * and return the HD bigpic URL. Falls back to slugToBigpic if extraction fails.
- *
- * GSMArena thumbnail pattern:
- *   https://fdn2.gsmarena.com/vv/pics/samsung/samsung-galaxy-s26-ultra-1.jpg
- * Bigpic pattern:
- *   https://fdn2.gsmarena.com/vv/bigpic/samsung-galaxy-s26-ultra.jpg
  */
 function toBigpicFromImgSrc(src: string, fallbackSlug: string): string {
   if (!src) return slugToBigpic(fallbackSlug);
-  if (src.includes('/vv/bigpic/')) return src;  // already HD
+  if (src.includes('/vv/bigpic/')) return src;
   if (src.includes('/vv/pics/')) {
-    // Extract filename: /vv/pics/samsung/samsung-galaxy-s26-ultra-1.jpg → samsung-galaxy-s26-ultra
     const match = src.match(/\/vv\/pics\/[^/]+\/(.+)-\d+\.jpg$/);
     if (match) {
       return `https://fdn2.gsmarena.com/vv/bigpic/${match[1]}.jpg`;
     }
   }
-  // Can't derive bigpic — fall back to slug-based URL
   return slugToBigpic(fallbackSlug);
 }
 
 export class ParserService {
 
   private async _parseStatsTable(captionText: string): Promise<IPhoneListItem[]> {
+    const ck = `gsm:stats:v1:${captionText}`;
+    const cached = await cacheGet<IPhoneListItem[]>(ck);
+    if (cached) return cached;
+
     const html = await getHtml(`${baseUrl}/stats.php3`);
     const $ = cheerio.load(html);
     const topPhones: IPhoneListItem[] = [];
@@ -71,10 +70,15 @@ export class ParserService {
       }
     });
 
+    cacheSet(ck, topPhones);
     return topPhones;
   }
 
   async getPhonesByBrand(brandSlug: string): Promise<IPhoneListItem[]> {
+    const ck = `gsm:brand:v1:${brandSlug}`;
+    const cached = await cacheGet<IPhoneListItem[]>(ck);
+    if (cached) return cached;
+
     const html = await getHtml(`${baseUrl}/${brandSlug}.php`);
     const $ = cheerio.load(html);
     const phones: IPhoneListItem[] = [];
@@ -95,10 +99,15 @@ export class ParserService {
       }
     });
 
+    cacheSet(ck, phones);
     return phones;
   }
 
   async getLatestPhones(): Promise<IPhoneListItem[]> {
+    const ck = `gsm:latest:v1`;
+    const cached = await cacheGet<IPhoneListItem[]>(ck);
+    if (cached) return cached;
+
     const html = await getHtml(`${baseUrl}/new.php3`);
     const $ = cheerio.load(html);
     const phones: IPhoneListItem[] = [];
@@ -119,6 +128,7 @@ export class ParserService {
       }
     });
 
+    cacheSet(ck, phones);
     return phones;
   }
 
@@ -131,6 +141,10 @@ export class ParserService {
   }
 
   async search(query: string): Promise<ISearchResult[]> {
+    const ck = `gsm:search:v1:${query.toLowerCase().trim()}`;
+    const cached = await cacheGet<ISearchResult[]>(ck);
+    if (cached) return cached;
+
     const html = await getHtml(`${baseUrl}/results.php3?sQuickSearch=yes&sName=${encodeURIComponent(query)}`);
     const $ = cheerio.load(html);
     const phones: ISearchResult[] = [];
@@ -140,15 +154,13 @@ export class ParserService {
       if (href) {
         const name = $(el).find('span').html()?.split('<br>').join(' ').trim() || $(el).find('span').text().trim();
         const searchSlug = href.replace('.php', '');
-        // Read the actual img src from the page (always valid) then upgrade to bigpic.
-        // Fall back to slugToBigpic if no img found.
         const rawImgSrc = $(el).find('img').attr('src') || '';
         const bigpic = rawImgSrc ? toBigpicFromImgSrc(rawImgSrc, searchSlug) : slugToBigpic(searchSlug);
         phones.push({
           name: name,
           slug: searchSlug,
-          imageUrl: bigpic,          // HD bigpic — may 404 for some phones
-          thumbUrl: rawImgSrc || undefined, // original thumbnail — always valid
+          imageUrl: bigpic,
+          thumbUrl: rawImgSrc || undefined,
           detail_url: `/${searchSlug}`,
         });
       }
@@ -156,7 +168,7 @@ export class ParserService {
 
     const normalizedQuery = query.toLowerCase().replace(/[^a-z0-9]/g, '');
 
-    return phones.sort((a, b) => {
+    const result = phones.sort((a, b) => {
       const aName = a.name.toLowerCase().replace(/[^a-z0-9]/g, '');
       const bName = b.name.toLowerCase().replace(/[^a-z0-9]/g, '');
 
@@ -168,6 +180,9 @@ export class ParserService {
 
       return 0;
     });
+
+    cacheSet(ck, result);
+    return result;
   }
 
 }
