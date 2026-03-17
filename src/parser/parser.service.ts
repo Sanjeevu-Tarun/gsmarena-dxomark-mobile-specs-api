@@ -165,19 +165,42 @@ export class ParserService {
     });
 
     const normalizedQuery = query.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const queryWords = query.toLowerCase().trim().split(/\s+/).filter(w => w.length > 1);
 
-    const result = phones.sort((a, b) => {
-      const aName = a.name.toLowerCase().replace(/[^a-z0-9]/g, '');
-      const bName = b.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+    // Variant words that should be penalised if they appear in result but NOT in query
+    const VARIANTS = ['ultra', 'pro', 'plus', 'mini', 'lite', 'fe', 'max', 'standard', 'turbo', 'edge'];
 
-      if (aName === normalizedQuery && bName !== normalizedQuery) return -1;
-      if (aName !== normalizedQuery && bName === normalizedQuery) return 1;
+    function scorePhone(name: string): number {
+      const nameLower = name.toLowerCase();
+      const nameNorm  = nameLower.replace(/[^a-z0-9]/g, '');
 
-      if (aName.startsWith(normalizedQuery) && !bName.startsWith(normalizedQuery)) return -1;
-      if (!aName.startsWith(normalizedQuery) && bName.startsWith(normalizedQuery)) return 1;
+      // Exact match — best possible
+      if (nameNorm === normalizedQuery) return 10000;
 
-      return 0;
-    });
+      // All query words must appear in the name
+      const allMatch = queryWords.every(w => nameLower.includes(w));
+      if (!allMatch) return -1;
+
+      // Penalise each variant word present in result but absent from query
+      // e.g. query="samsung s26" → "s26 ultra" gets -2000 for "ultra"
+      let penalty = 0;
+      for (const v of VARIANTS) {
+        if (nameLower.includes(v) && !query.toLowerCase().includes(v)) {
+          penalty += 2000;
+        }
+      }
+
+      // Bonus for shorter name (closer match to query)
+      const lengthBonus = Math.max(0, 300 - name.length * 4);
+
+      return 5000 - penalty + lengthBonus;
+    }
+
+    const result = phones
+      .map(p => ({ p, score: scorePhone(p.name) }))
+      .filter(x => x.score >= 0)
+      .sort((a, b) => b.score - a.score)
+      .map(x => x.p);
 
     cacheSet(ck, result);
     return result;
