@@ -888,7 +888,13 @@ app.get('/phone', async (request, reply) => {
   const fullCk = `gsm:phone-full:v1:${name.toLowerCase().trim()}`;
   const fullCached = await cacheGetWithSource<any>(fullCk);
   if (fullCached.data) {
-    return { ...fullCached.data, _cache: fullCached.source };
+    const cached = fullCached.data;
+    return {
+      status: cached.status,
+      matched: cached.matched,
+      _cache: fullCached.source,
+      data: cached.data,
+    };
   }
 
   // Step 1 – search
