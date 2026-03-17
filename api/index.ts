@@ -884,20 +884,19 @@ app.get('/phone', async (request, reply) => {
     return reply.status(400).send({ status: false, error: 'Query param "name" is required. e.g. /phone?name=samsung galaxy s26 ultra' });
   }
 
-  // Step 1 – search for best match (with cache source tracking)
-  const searchCk = `gsm:search:v1:${name.toLowerCase().trim()}`;
-  const searchCached = await cacheGetWithSource<any[]>(searchCk);
-  let searchResults: any[];
-  let cacheSource = searchCached.source; // 'mem' | 'redis' | 'miss'
+  // Full response cached under a single key — cache hit = instant return
+  const fullCk = `gsm:phone-full:v1:${name.toLowerCase().trim()}`;
+  const fullCached = await cacheGetWithSource<any>(fullCk);
+  if (fullCached.data) {
+    return { ...fullCached.data, _cache: fullCached.source };
+  }
 
-  if (searchCached.data) {
-    searchResults = searchCached.data;
-  } else {
-    try {
-      searchResults = await parserService.search(name);
-    } catch (err: any) {
-      return reply.status(500).send({ status: false, error: `Search failed: ${err?.message}` });
-    }
+  // Step 1 – search
+  let searchResults: any[];
+  try {
+    searchResults = await parserService.search(name);
+  } catch (err: any) {
+    return reply.status(500).send({ status: false, error: `Search failed: ${err?.message}` });
   }
 
   if (!searchResults || searchResults.length === 0) {
@@ -905,31 +904,21 @@ app.get('/phone', async (request, reply) => {
   }
 
   const bestMatch = searchResults[0];
-  // slug from detail_url is like "/samsung_galaxy_s26_ultra-12548"
   const deviceSlug = bestMatch.slug.replace(/^\//, '');
 
-  // Step 2 – fetch full specs (with cache source tracking)
-  const specsCk = `gsm:phone:v1:${deviceSlug}`;
-  const specsCached = await cacheGetWithSource<any>(specsCk);
+  // Step 2 – fetch full specs
   let specs: any;
-  if (specsCached.data) {
-    specs = specsCached.data;
-    if (specsCached.source !== 'miss') cacheSource = specsCached.source;
-  } else {
-    cacheSource = 'miss';
-    try {
-      specs = await getPhoneDetails(deviceSlug);
-    } catch (err: any) {
-      return reply.status(500).send({ status: false, error: `Specs fetch failed: ${err?.message}` });
-    }
+  try {
+    specs = await getPhoneDetails(deviceSlug);
+  } catch (err: any) {
+    return reply.status(500).send({ status: false, error: `Specs fetch failed: ${err?.message}` });
   }
 
-  // Step 3 – scrape camera samples from review/camera page
+  // Step 3 – scrape camera samples
   let cameraSamples: any[] = [];
   let lensDetails: any[] = [];
   let hdImageUrl: string | null = specs.imageUrl || null;
 
-  // Helper: try scraping camera samples from a given page URL
   const tryCameraUrl = async (url: string): Promise<boolean> => {
     try {
       const slug = url.replace(/^https?:\/\/[^/]+\//, '').replace(/\.php$/, '');
@@ -943,22 +932,14 @@ app.get('/phone', async (request, reply) => {
     return false;
   };
 
-  // Attempt 1: use review_url from specs page (flagship phones with full reviews)
   if (specs.review_url) {
     await tryCameraUrl(specs.review_url);
   }
 
-  // Attempt 2: scrape the device's GSMArena opinions/articles page.
-  // GSMArena has a dedicated page for every device at:
-  //   {base}-opinions-{id}.php   (same ID as the specs page slug)
-  // This page lists ALL articles, news, and camera-samples posts for the device.
-  // This is the universal fix — works for any phone, not just iQOO Z7 Pro.
   if (cameraSamples.length === 0) {
     try {
       const { getHtml } = await import('../src/parser/parser.service');
       const { load } = await import('cheerio');
-
-      // Derive opinions page URL from device slug: "vivo_iqoo_z7_pro_5g-11843"
       const slugMatch = deviceSlug.match(/^(.+)-(\d+)$/);
       if (slugMatch) {
         const opinionsUrl = `https://www.gsmarena.com/${slugMatch[1]}-opinions-${slugMatch[2]}.php`;
@@ -982,10 +963,10 @@ app.get('/phone', async (request, reply) => {
     } catch { /* opinions page failed */ }
   }
 
-  return {
+  const result = {
     status: true,
     matched: bestMatch.name,
-    _cache: cacheSource,   // 'mem' | 'redis' | 'miss'
+    _cache: 'miss' as const,
     data: {
       ...specs,
       hdImageUrl,
@@ -993,6 +974,11 @@ app.get('/phone', async (request, reply) => {
       lensDetails,
     },
   };
+
+  // Cache the entire assembled response — next request returns instantly
+  cacheSet(fullCk, { status: result.status, matched: result.matched, data: result.data });
+
+  return result;
 });
 
 // ── /:slug must be LAST – it's a catch-all for device specs ──────────────────
