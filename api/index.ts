@@ -704,6 +704,43 @@ app.get('/debug/flush-html', async (_request, reply) => {
   return { ok: true, scanned, deleted };
 });
 
+// Full cache cycle test for /phone endpoint
+app.get('/debug/cache-test', async (request, reply) => {
+  const name = (request.query as any).name || 'samsung galaxy s25 ultra';
+  const normName = name.toLowerCase().trim().replace(/\s+/g, ' ');
+  const fullCk = `gsm:phone-full:v1:${normName}`;
+
+  const url   = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+
+  // Step 1: check if key exists in Redis directly
+  let redisRaw: any = null;
+  let redisError: any = null;
+  try {
+    const axios = (await import('axios')).default;
+    const resp = await axios.get(`${url}/get/${encodeURIComponent(fullCk)}`, {
+      headers: { Authorization: `Bearer ${token}` }, timeout: 10000,
+    });
+    redisRaw = resp.data;
+  } catch (e: any) {
+    redisError = e.message;
+  }
+
+  // Step 2: check mem cache
+  const memResult = await cacheGetWithSource<any>(fullCk);
+
+  return {
+    key: fullCk,
+    memCache: memResult.source,
+    redisResult: redisRaw?.result ? 'HIT (value length: ' + redisRaw.result.length + ')' : 'MISS',
+    redisError,
+    envVars: {
+      url: url ? url.slice(0, 40) + '...' : 'MISSING',
+      token: token ? token.slice(0, 8) + '...' : 'MISSING',
+    }
+  };
+});
+
 // Redis connectivity test
 app.get('/debug/redis', async (_request, reply) => {
   const url   = process.env.UPSTASH_REDIS_REST_URL;
