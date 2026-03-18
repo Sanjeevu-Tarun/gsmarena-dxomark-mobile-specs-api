@@ -289,57 +289,7 @@ export async function getPhoneDetails(slug: string): Promise<IPhoneDetails> {
       });
     }
 
-    // ULTIMATE fallback: GSMArena NEWS LIST search
-    // newslist.php3?sSearch= directly indexes news/camera articles — unlike search.php3
-    // which only searches device pages. This finds articles like:
-    //   "vivo_iqoo_z7_pro_5g_camera_samples_specs-news-59639.php"
-    // even when the specs page has zero links to it.
-    if (!review_url && model) {
-      try {
-        // Use just the model without brand prefix for better news search results
-        // e.g. "vivo iQOO Z7 Pro" → search "iQOO Z7 Pro camera"
-        const modelWords = model.replace(/^vivo\s+/i, '').replace(/^xiaomi\s+/i, '')
-          .replace(/^samsung\s+/i, '').replace(/^apple\s+/i, '');
-        const newsQuery = encodeURIComponent(modelWords + ' camera');
-        const newsUrl = `${baseUrl}/newslist.php3?sSearch=${newsQuery}`;
-        console.log(`[getPhoneDetails] Trying newslist fallback: ${newsUrl}`);
-        const newsHtml = await getHtml(newsUrl);
-        const $news = cheerio.load(newsHtml);
 
-        // News list items are <li> with <a href="...news-NNN.php">
-        const newsCandidates: LinkCandidate[] = [];
-        $news('a[href]').each((_, el) => {
-          const href = ($news(el).attr('href') || '').toLowerCase();
-          if (!href.endsWith('.php')) return;
-          if (!href.includes('camera') && !href.includes('review')) return;
-
-          const score = reviewScore(href);
-          if (score === 0) return;
-
-          const isRelated = isLinkRelatedToDevice(href, slug, brand, modelWords);
-          const fullUrl = href.startsWith('http') ? href : `${baseUrl}/${href}`;
-          newsCandidates.push({ href: fullUrl, score, isRelated });
-        });
-
-        console.log(`[getPhoneDetails] Newslist fallback found ${newsCandidates.length} candidates:`, 
-          newsCandidates.slice(0, 5).map(c => ({ href: c.href, score: c.score, isRelated: c.isRelated })));
-
-        newsCandidates.sort((a, b) => {
-          if (a.isRelated !== b.isRelated) return a.isRelated ? -1 : 1;
-          return b.score - a.score;
-        });
-
-        if (newsCandidates.length > 0 && newsCandidates[0].isRelated) {
-          review_url = newsCandidates[0].href;
-          console.log(`[getPhoneDetails] Newslist fallback selected: ${review_url}`);
-        } else if (newsCandidates.length > 0 && newsCandidates[0].score >= 70) {
-          review_url = newsCandidates[0].href;
-          console.log(`[getPhoneDetails] Newslist fallback selected (unrelated high-score): ${review_url}`);
-        }
-      } catch (e: any) {
-        console.log(`[getPhoneDetails] Newslist fallback failed: ${e?.message}`);
-      }
-    }
 
     // ── HD pictures page link ────────────────────────────────────────────────
     // GSMArena specs pages link to a pictures gallery: {device}-pictures-{id}.php
@@ -406,24 +356,37 @@ export async function getPhoneDetails(slug: string): Promise<IPhoneDetails> {
     });
     
     // ── Sibling device slugs ──────────────────────────────────────────────────
-    // Collect links to OTHER device spec pages on this page (e.g. "Also check", related phones).
-    // Used by the fallback in index.ts to find variant slugs (e.g. _5g) when all else fails.
-    const siblingSlugTokens = slug.toLowerCase().replace(/-\d+$/, '').split('_')
-      .filter((t: string) => t.length > 1);
+    // Collect links to OTHER device spec pages that are variants of this device.
+    // Strip brand prefix and generic words — only match on SPECIFIC model tokens.
+    // e.g. "vivo_iqoo_z7_pro" → specific tokens: ["iqoo", "z7"]
+    // "vivo_x300_pro_5g" shares only "pro" (generic) → NOT a sibling
+    // "vivo_iqoo_z7_pro_5g" shares "iqoo" + "z7" → IS a sibling
+    const GENERIC_TOKENS = new Set(['pro', 'plus', 'ultra', 'mini', 'lite', 'max', '5g', '4g', 'fe', 'se', 'neo', 'edge', 'vivo', 'iqoo', 'xiaomi', 'samsung', 'apple', 'google', 'oppo', 'realme', 'oneplus', 'nothing', 'nokia', 'motorola', 'honor', 'huawei']);
+    // Brand token = first part of slug
+    const brandToken = slug.split('_')[0];
+    const slugBase = slug.toLowerCase().replace(/-\d+$/, '');
+    // Specific tokens: exclude brand and generic words, keep model-specific identifiers
+    const specificTokens = slugBase.split('_').filter((t: string) => 
+      t.length > 1 && !GENERIC_TOKENS.has(t) && t !== brandToken
+    );
+    // If no specific tokens found (e.g. slug is just "vivo_pro"), fall back to all non-brand tokens
+    const matchTokens = specificTokens.length > 0 
+      ? specificTokens 
+      : slugBase.split('_').filter((t: string) => t.length > 1 && t !== brandToken);
+
     const siblingDeviceSlugs: string[] = [];
     $('a[href]').each((_, el) => {
       const href = ($(el).attr('href') || '').replace(/\.php$/, '').replace(/^\//, '');
-      // Must look like a device slug: lowercase letters/numbers/underscores then dash then numbers
       if (!/^[a-z0-9_]+-\d+$/.test(href)) return;
-      if (href === slug) return; // skip self
-      // Must share at least 2 tokens with our slug (to avoid unrelated devices)
-      const hrefTokens = href.replace(/-\d+$/, '').split('_');
-      const shared = siblingSlugTokens.filter((t: string) => hrefTokens.includes(t)).length;
-      if (shared >= 2 && !siblingDeviceSlugs.includes(href)) {
+      if (href === slug) return;
+      // ALL specific tokens must appear in the sibling slug
+      const hrefBase = href.replace(/-\d+$/, '').toLowerCase();
+      const allMatch = matchTokens.every((t: string) => hrefBase.includes(t));
+      if (allMatch && !siblingDeviceSlugs.includes(href)) {
         siblingDeviceSlugs.push(href);
       }
     });
-    console.log(`[getPhoneDetails] siblingDeviceSlugs for ${slug}:`, siblingDeviceSlugs);
+    console.log(`[getPhoneDetails] specificTokens for ${slug}:`, matchTokens, '→ siblings:', siblingDeviceSlugs);
 
     return { 
       brand, 
