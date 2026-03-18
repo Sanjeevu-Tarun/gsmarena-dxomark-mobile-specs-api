@@ -1121,6 +1121,60 @@ app.get('/phone', async (request, reply) => {
     } catch { /* opinions page failed */ }
   }
 
+  // 5G variant fallback:
+  // Some phones exist as TWO separate GSMArena entries (e.g. iQOO Z7 Pro vs iQOO Z7 Pro 5G),
+  // and the camera article may only be linked from the _5g variant's opinions page.
+  // If we still have no camera samples, search for "{name} 5G" and try that device's opinions page.
+  if (cameraSamples.length === 0 && !bestMatch.name.toLowerCase().includes('5g')) {
+    try {
+      const { getHtml } = await import('../src/parser/parser.service');
+      const { load } = await import('cheerio');
+
+      debug.steps.push({ action: '5g_variant_search', query: bestMatch.name + ' 5G' });
+      const results5g = await parserService.search(bestMatch.name + ' 5G');
+
+      for (const result5g of results5g.slice(0, 3)) {
+        const slug5g = result5g.slug.replace(/^\//, '');
+        const slugMatch5g = slug5g.match(/^(.+)-(\d+)$/);
+        if (!slugMatch5g) continue;
+
+        const opinionsUrl5g = `https://www.gsmarena.com/${slugMatch5g[1]}-opinions-${slugMatch5g[2]}.php`;
+        debug.steps.push({ action: '5g_opinions_attempt', url: opinionsUrl5g });
+
+        try {
+          const html5g = await getHtml(opinionsUrl5g);
+          const $5g = load(html5g);
+          const links5g: string[] = [];
+
+          $5g('a[href]').each((_: number, el: any) => {
+            const href: string = ($5g(el).attr('href') || '');
+            const lower = href.toLowerCase();
+            if (!lower.endsWith('.php')) return;
+            if (lower.includes('camera_samples') || lower.includes('camera-samples') ||
+                (lower.includes('-news-') && lower.includes('camera')) ||
+                lower.includes('-review-')) {
+              const full = href.startsWith('http') ? href : ('https://www.gsmarena.com/' + href);
+              if (!links5g.includes(full)) links5g.push(full);
+            }
+          });
+
+          debug.steps.push({ action: '5g_opinions_links', count: links5g.length, links: links5g });
+
+          for (const link of links5g) {
+            if (await tryCameraUrl(link)) {
+              specs.review_url = link;
+              debug.review_url = link;
+              debug.steps.push({ action: '5g_variant_found', url: link });
+              break;
+            }
+          }
+
+          if (cameraSamples.length > 0) break;
+        } catch { /* this variant's opinions page failed, try next */ }
+      }
+    } catch { /* 5G variant search failed */ }
+  }
+
   const result = {
     status: true,
     matched: bestMatch.name,
