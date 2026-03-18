@@ -122,7 +122,8 @@ function isContentImage(src: string): boolean {
  * These are the real camera samples — lifestyle/phone/sshots are article images.
  */
 function isCameraSampleImage(src: string): boolean {
-  return src.includes('/imgroot/reviews/') && src.includes('/camera/');
+  // Match: /imgroot/reviews/ AND /camera OR /camera1 OR /camera2 etc
+  return src.includes('/imgroot/reviews/') && /\/camera\d*\//.test(src);
 }
 
 /**
