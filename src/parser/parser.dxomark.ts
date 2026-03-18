@@ -36,6 +36,14 @@ export interface IDxoScore {
     lowLight: number | null;
     selfie: number | null;
     portrait: number | null;
+    // Detailed photo sub-scores
+    photoMain: number | null;
+    photoUltraWide: number | null;
+    photoTele: number | null;
+    // Detailed video sub-scores
+    videoMain: number | null;
+    videoUltraWide: number | null;
+    videoTele: number | null;
   };
   /** Pros from DXOMark verdict */
   strengths: string[];
@@ -430,65 +438,110 @@ function parseHtmlFallback(html: string, pageUrl: string, brand: string, model: 
     });
   }
 
-  // ── Sub-scores — parse from h4 headings + adjacent score numbers ───────────
-  // Structure in markdown: "Photo i\n\n152\n\n111\nXiaomi..."
-  // h4 text = score category, next number = score value
+  // ── Sub-scores ────────────────────────────────────────────────────────────
+  // Structure confirmed from live HTML fetch:
+  // "Photo i\n152\n111 Xiaomi...\nBEST 180\nMain i\n155\n124...\nBEST 184\nBokeh i\n165..."
+  // Pattern: label text → device score → worst score+name → BEST + best_score
+  //
+  // Use Case scores (Portrait 133, Lowlight 115, Zoom 137) are rendered in JS SVG circles
+  // and are NOT present in static HTML. Only their BEST values appear.
   const scores = {
-    photo: null as number | null,
-    video: null as number | null,
+    photo: null as number | null,          // Photo overall
+    video: null as number | null,          // Video overall
     audio: null as number | null,
-    display: null as number | null,
-    zoom: null as number | null,
-    bokeh: null as number | null,
-    lowLight: null as number | null,
+    display: null as number | null,        // Display tab (separate, not scraped here)
+    zoom: null as number | null,           // Photo > Tele
+    bokeh: null as number | null,          // Photo > Bokeh
+    lowLight: null as number | null,       // Use Case: Lowlight (JS-rendered, may be null)
     selfie: null as number | null,
-    portrait: null as number | null,
+    portrait: null as number | null,       // Use Case: Portrait (JS-rendered, may be null)
+    // Detailed sub-scores
+    photoMain: null as number | null,
+    photoUltraWide: null as number | null,
+    photoTele: null as number | null,
+    videoMain: null as number | null,
+    videoUltraWide: null as number | null,
+    videoTele: null as number | null,
   };
 
-  // Collect all text nodes that are standalone numbers, paired with nearby label
-  // Walk the DOM collecting (label, score) pairs from "Sub-scores" section
-  const allText: Array<{ text: string; tag: string }> = [];
-  $('h1,h2,h3,h4,h5,p,span,div,td,li').each((_: any, el: any) => {
+  // Walk all text-bearing elements and build a flat list
+  const allText: Array<{ text: string }> = [];
+  $('h1,h2,h3,h4,h5,p,span,div,td,li,a').each((_: any, el: any) => {
     const txt = $(el).clone().children().remove().end().text().trim();
-    if (txt.length > 0 && txt.length < 200) {
-      allText.push({ text: txt, tag: el.name });
-    }
+    if (txt.length > 0 && txt.length < 300) allText.push({ text: txt });
   });
 
-  // Find score labels and extract the FIRST number after each label
-  const LABEL_MAP: Array<[RegExp, keyof typeof scores]> = [
-    [/^photo$/i,      'photo'],
-    [/^video$/i,      'video'],
-    [/^audio$/i,      'audio'],
-    // display is a separate tab on DXOMark, not a camera sub-score — skip
-    [/^(zoom|tele)$/i,'zoom'],
-    [/^bokeh$/i,      'bokeh'],
-    [/^(lowlight|low.?light|night)$/i, 'lowLight'],
-    [/^(selfie|front)$/i, 'selfie'],
-    [/^portrait$/i,   'portrait'],
-    // ultra-wide is a sub-score of photo/video, not mapped to a top-level field
+  // Context-aware label matching
+  // We track whether we're in Photo section or Video section
+  // to correctly assign Tele/Main/Ultra-Wide to photo vs video
+  type ScoreKey = keyof typeof scores;
+  let photoSection = false;
+  let videoSection = false;
+
+  const TOP_LABELS: Array<[RegExp, ScoreKey]> = [
+    [/^photo$/i, 'photo'],
+    [/^video$/i, 'video'],
+    [/^bokeh$/i, 'bokeh'],
   ];
 
+  const SUB_LABELS: Array<[RegExp, 'main' | 'ultrawide' | 'tele']> = [
+    [/^main$/i, 'main'],
+    [/^(ultra.?wide|ultrawide)$/i, 'ultrawide'],
+    [/^tele$/i, 'tele'],
+  ];
+
+  function nextScore(i: number): number | null {
+    for (let j = i + 1; j < Math.min(i + 6, allText.length); j++) {
+      // Skip "BEST" lines
+      if (/best/i.test(allText[j].text)) continue;
+      // Skip lines that are clearly device names (contain letters mixed with numbers)
+      if (/[a-zA-Z]/.test(allText[j].text) && !/^\d+$/.test(allText[j].text.replace(/\D/g,''))) continue;
+      const n = parseInt(allText[j].text.replace(/\D/g, ''), 10);
+      if (!isNaN(n) && n >= 50 && n <= 200) return n;
+    }
+    return null;
+  }
+
   for (let i = 0; i < allText.length; i++) {
-    const labelText = allText[i].text.replace(/\s*i\s*$/, '').trim(); // strip trailing "i" (info icon)
-    for (const [regex, field] of LABEL_MAP) {
-      if (regex.test(labelText) && (scores as any)[field] === null) {
-        // Look ahead for the first number in range
-        for (let j = i + 1; j < Math.min(i + 5, allText.length); j++) {
-          const n = parseInt(allText[j].text.replace(/\D/g, ''), 10);
-          if (!isNaN(n) && n >= 50 && n <= 200) {
-            (scores as any)[field] = n;
-            break;
-          }
+    const raw = allText[i].text;
+    const label = raw.replace(/\s*i\s*$/, '').trim(); // strip info icon "i"
+
+    // Track section context
+    if (/^photo$/i.test(label)) { photoSection = true; videoSection = false; }
+    if (/^video$/i.test(label)) { videoSection = true; photoSection = false; }
+    // Reset on new top-level sections
+    if (/^(use cases|specifications|pricing|summary)$/i.test(label)) {
+      photoSection = false; videoSection = false;
+    }
+
+    // Top-level scores
+    for (const [regex, field] of TOP_LABELS) {
+      if (regex.test(label) && scores[field] === null) {
+        const v = nextScore(i);
+        if (v) scores[field] = v;
+        break;
+      }
+    }
+
+    // Sub-label scores (Main, Ultra-Wide, Tele)
+    for (const [regex, subKey] of SUB_LABELS) {
+      if (regex.test(label)) {
+        const v = nextScore(i);
+        if (!v) break;
+        if (subKey === 'main') {
+          if (photoSection && !scores.photoMain) scores.photoMain = v;
+          else if (videoSection && !scores.videoMain) scores.videoMain = v;
+        } else if (subKey === 'ultrawide') {
+          if (photoSection && !scores.photoUltraWide) scores.photoUltraWide = v;
+          else if (videoSection && !scores.videoUltraWide) scores.videoUltraWide = v;
+        } else if (subKey === 'tele') {
+          if (photoSection && !scores.photoTele) { scores.photoTele = v; scores.zoom = v; }
+          else if (videoSection && !scores.videoTele) scores.videoTele = v;
         }
         break;
       }
     }
   }
-
-  // Use case scores (Portrait, Lowlight, Zoom) — shown in "Use Cases" section
-  // These appear as numbers in circle elements after "#### Portrait", "#### Lowlight" etc.
-  // They're already captured above via LABEL_MAP matching on h4/h5 text
 
   // ── Pros and Cons ──────────────────────────────────────────────────────────
   // Structure: h4 "Pros" → ul > li items, h4 "Cons" → ul > li items
@@ -597,7 +650,7 @@ function parseHtmlFallback(html: string, pageUrl: string, brand: string, model: 
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function searchDxo(query: string): Promise<IDxoSearchResult[]> {
-  const ck = `dxo:search:v6:${query.toLowerCase().trim()}`;
+  const ck = `dxo:search:v7:${query.toLowerCase().trim()}`;
   const cached = await cacheGet<IDxoSearchResult[]>(ck);
   if (cached) return cached;
 
@@ -632,13 +685,13 @@ export async function searchDxo(query: string): Promise<IDxoSearchResult[]> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function scrapeDxoPage(pageUrl: string): Promise<IDxoScore> {
-  const ck = `dxo:page:v6:${pageUrl}`;
+  const ck = `dxo:page:v7:${pageUrl}`;
   const cached = await cacheGet<IDxoScore>(ck);
   if (cached) return cached;
 
   const FAILED: IDxoScore = {
     device: '', url: pageUrl, overallScore: null,
-    scores: { photo: null, video: null, audio: null, display: null, zoom: null, bokeh: null, lowLight: null, selfie: null, portrait: null },
+    scores: { photo: null, video: null, audio: null, display: null, zoom: null, bokeh: null, lowLight: null, selfie: null, portrait: null, photoMain: null, photoUltraWide: null, photoTele: null, videoMain: null, videoUltraWide: null, videoTele: null },
     strengths: [], weaknesses: [], rankLabel: null, rankPosition: null, rankSegment: null, labelType: null, labelYear: null,
     scrapedAt: new Date().toISOString(), _source: 'failed',
   };
@@ -684,7 +737,7 @@ export async function scrapeDxoPage(pageUrl: string): Promise<IDxoScore> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function getDxoScores(deviceName: string): Promise<IDxoScore | null> {
-  const ck = `dxo:result:v6:${deviceName.toLowerCase().trim()}`;
+  const ck = `dxo:result:v7:${deviceName.toLowerCase().trim()}`;
   const cached = await cacheGet<IDxoScore>(ck);
   if (cached) return cached;
 
