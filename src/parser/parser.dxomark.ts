@@ -178,9 +178,16 @@ function splitBrandModel(deviceName: string): { brand: string; model: string } {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function buildDxoUrl(brand: string, model: string): string {
-  // Preserve model casing exactly as-is (DXOMark is inconsistent — "9-pro" not "9-Pro")
-  // Just replace spaces with dashes.
-  const modelSlug = model.trim().replace(/\s+/g, '-');
+  // DXOMark uses title case: "9 pro" → "9-Pro", "Galaxy S25 Ultra" → "Galaxy-S25-Ultra"
+  // Special case: "iPhone" must stay as "iPhone" not become "IPhone"
+  const modelSlug = model
+    .trim()
+    .split(/\s+/)
+    .map(w => {
+      if (w.toLowerCase() === 'iphone') return 'iPhone';
+      return w.charAt(0).toUpperCase() + w.slice(1);
+    })
+    .join('-');
   return `${DXO_BASE}/smartphones/${brand}/${modelSlug}`;
 }
 
@@ -432,7 +439,7 @@ export async function searchDxo(query: string): Promise<IDxoSearchResult[]> {
         url: p.link || `${DXO_BASE}/${p.slug}/`,
         score: null,
       }));
-      cacheSet(ck, results, 3600);
+      cacheSet(ck, results);
       return results;
     }
   } catch { /* fall through */ }
@@ -441,7 +448,7 @@ export async function searchDxo(query: string): Promise<IDxoSearchResult[]> {
   const { brand, model } = splitBrandModel(query);
   const candidateUrl = buildDxoUrl(brand, model);
   const result: IDxoSearchResult = { name: query, url: candidateUrl, score: null };
-  cacheSet(ck, [result], 3600);
+  cacheSet(ck, [result]);
   return [result];
 }
 
@@ -480,20 +487,20 @@ export async function scrapeDxoPage(pageUrl: string): Promise<IDxoScore> {
   // Tier 1
   const t1 = parseNextData(html, pageUrl);
   if (t1 && (t1.overallScore || t1.strengths.length > 0)) {
-    cacheSet(ck, t1, 21600);
+    cacheSet(ck, t1);
     return t1;
   }
 
   // Tier 2
   const t2 = await queryGraphQL(brand, model, pageUrl);
   if (t2 && (t2.overallScore || t2.strengths.length > 0)) {
-    cacheSet(ck, t2, 21600);
+    cacheSet(ck, t2);
     return t2;
   }
 
   // Tier 3
   const t3 = parseHtmlFallback(html, pageUrl, brand, model);
-  cacheSet(ck, t3, 7200);
+  cacheSet(ck, t3);
   return t3;
 }
 
@@ -515,7 +522,7 @@ export async function getDxoScores(deviceName: string): Promise<IDxoScore | null
   // Always cache and return — even failed results show the attempted URL
   // so the caller knows what URL was tried and can debug
   if (result._source !== 'failed') {
-    cacheSet(ck, result, 21600);
+    cacheSet(ck, result);
   }
   return result; // never return null — always return what we got
 }
