@@ -633,7 +633,7 @@ export async function getReviewDetails(reviewSlug: string): Promise<IReviewResul
     if (lensDetails.length >= 2) break; // found a real camera list
   }
 
-  // Scrape article images from non-camera pages (p1, p2, p3, p4 etc.)
+  // Scrape article images from non-camera pages (p1, p2, p3, p4 etc)
   const articleImages: IReviewGallerySection[] = [];
   // Just scrape p1 (overview) for article images to keep response lean
   const p1Sections = await scrapeArticleImages(baseReviewSlug, 1);
