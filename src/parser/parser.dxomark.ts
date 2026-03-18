@@ -35,6 +35,7 @@ export interface IDxoScore {
     bokeh: number | null;
     lowLight: number | null;
     selfie: number | null;
+    portrait: number | null;
   };
   /** Pros from DXOMark verdict */
   strengths: string[];
@@ -42,6 +43,9 @@ export interface IDxoScore {
   weaknesses: string[];
   rankLabel: string | null;
   rankPosition: number | null;
+  rankSegment: string | null;
+  labelType: string | null;
+  labelYear: string | null;
   scrapedAt: string;
   _source: 'next_data' | 'graphql' | 'html' | 'failed';
 }
@@ -376,39 +380,46 @@ async function queryGraphQL(brand: string, model: string, pageUrl: string): Prom
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TIER 3 — HTML scraping (PRIMARY path — DXOMark is NOT Next.js)
-// The /smartphones/Brand/Model page is classic server-rendered HTML.
+// TIER 3 — HTML scraping (PRIMARY — DXOMark is classic server-rendered HTML)
+// Structure confirmed from live page fetch.
 // ─────────────────────────────────────────────────────────────────────────────
 
 function parseHtmlFallback(html: string, pageUrl: string, brand: string, model: string): IDxoScore {
   const $ = cheerio.load(html);
 
-  // Device name from title: "Samsung Galaxy S25 Ultra - DXOMARK"
+  // ── Device name ────────────────────────────────────────────────────────────
+  // Title: "Samsung Galaxy S25 Ultra - DXOMARK"
   const device =
     $('title').first().text().replace(/\s*[-–|]\s*DXOMARK\s*$/i, '').trim() ||
     $('h1').first().text().trim() ||
     `${brand} ${model}`;
 
-  // ── Overall score ──────────────────────────────────────────────────────────
+  // ── Scores section — only look inside #scores or the Scores section ────────
+  // The page has Camera and Display tabs. We want Camera scores.
+  // Overall score appears as a standalone number "151" in the scores block.
+  // Strategy: find all standalone integers 50-200, first one is overall camera score.
   let overallScore: number | null = null;
+  let displayScore: number | null = null;
 
-  const scoreSelectors = [
-    '.rankingScore', '.scoreBadge', '.score-value', '.dxo-score',
-    '[class*="scoreValue"]', '[class*="score-value"]', '[class*="ScoreValue"]',
-    '[class*="rankingScore"]', '[class*="globalScore"]', '[class*="overallScore"]',
-  ];
-
-  for (const sel of scoreSelectors) {
-    $(sel).each((_: any, el: any) => {
-      if (overallScore) return false;
-      const txt = $(el).clone().children().remove().end().text().replace(/\D/g, '').trim();
+  // "Overall Camera Score" block — the score is a direct text child
+  // Structure: "Overall Camera Score i\n\n151\n\n45\nXiaomi Redmi A3\n\nBEST 175"
+  // Find the paragraph/div containing "Overall Camera Score"
+  let inCameraSection = false;
+  $('*').each((_: any, el: any) => {
+    if (overallScore && displayScore) return false;
+    const txt = $(el).clone().children().remove().end().text().trim();
+    if (txt === 'Overall Camera Score') inCameraSection = true;
+    if (txt === 'Overall Display Score') inCameraSection = false;
+    if (inCameraSection && !overallScore) {
       const n = parseInt(txt, 10);
-      if (!isNaN(n) && n >= 50 && n <= 200) overallScore = n;
-    });
-    if (overallScore) break;
-  }
+      if (!isNaN(n) && n >= 50 && n <= 200 && txt === String(n)) overallScore = n;
+    }
+    if (!inCameraSection && txt === 'Overall Display Score') {
+      // next number sibling is display score
+    }
+  });
 
-  // Scan ALL leaf elements for standalone score numbers
+  // Simpler fallback: the FIRST standalone 2-3 digit number (50-200) in page
   if (!overallScore) {
     $('*').each((_: any, el: any) => {
       if (overallScore) return false;
@@ -419,79 +430,133 @@ function parseHtmlFallback(html: string, pageUrl: string, brand: string, model: 
     });
   }
 
-  // ── Sub-scores ─────────────────────────────────────────────────────────────
+  // ── Sub-scores — parse from h4 headings + adjacent score numbers ───────────
+  // Structure in markdown: "Photo i\n\n152\n\n111\nXiaomi..."
+  // h4 text = score category, next number = score value
   const scores = {
-    photo: null as number | null, video: null as number | null,
-    audio: null as number | null, display: null as number | null,
-    zoom: null as number | null, bokeh: null as number | null,
-    lowLight: null as number | null, selfie: null as number | null,
+    photo: null as number | null,
+    video: null as number | null,
+    audio: null as number | null,
+    display: null as number | null,
+    zoom: null as number | null,
+    bokeh: null as number | null,
+    lowLight: null as number | null,
+    selfie: null as number | null,
+    portrait: null as number | null,
   };
 
-  $('[class*="score"],[class*="Score"],[class*="criteria"],[class*="Criteria"]').each((_: any, el: any) => {
-    const label = (
-      $(el).find('[class*="label"],[class*="title"],[class*="name"]').text() ||
-      $(el).prev().text() ||
-      $(el).parent().find('[class*="label"]').text()
-    ).toLowerCase().trim();
-    const valTxt = (
-      $(el).find('[class*="value"],span').first().text() ||
-      $(el).clone().children().remove().end().text()
-    ).replace(/\D/g, '').trim();
-    const val = parseInt(valTxt, 10);
-    if (isNaN(val) || val < 10 || val > 200) return;
-    if (label.includes('photo') || label.includes('image')) scores.photo = val;
-    else if (label.includes('video')) scores.video = val;
-    else if (label.includes('audio') || label.includes('sound')) scores.audio = val;
-    else if (label.includes('display') || label.includes('screen')) scores.display = val;
-    else if (label.includes('zoom') || label.includes('tele')) scores.zoom = val;
-    else if (label.includes('bokeh') || label.includes('portrait')) scores.bokeh = val;
-    else if (label.includes('low') || label.includes('night')) scores.lowLight = val;
-    else if (label.includes('selfie') || label.includes('front')) scores.selfie = val;
+  // Collect all text nodes that are standalone numbers, paired with nearby label
+  // Walk the DOM collecting (label, score) pairs from "Sub-scores" section
+  const allText: Array<{ text: string; tag: string }> = [];
+  $('h1,h2,h3,h4,h5,p,span,div,td,li').each((_: any, el: any) => {
+    const txt = $(el).clone().children().remove().end().text().trim();
+    if (txt.length > 0 && txt.length < 200) {
+      allText.push({ text: txt, tag: el.name });
+    }
   });
 
-  // ── Strengths & Weaknesses ─────────────────────────────────────────────────
+  // Find score labels and extract the FIRST number after each label
+  const LABEL_MAP: Array<[RegExp, keyof typeof scores]> = [
+    [/^photo$/i,      'photo'],
+    [/^video$/i,      'video'],
+    [/^audio$/i,      'audio'],
+    [/^display$/i,    'display'],
+    [/^(zoom|tele)$/i,'zoom'],
+    [/^bokeh$/i,      'bokeh'],
+    [/^(lowlight|low.?light|night)$/i, 'lowLight'],
+    [/^(selfie|front)$/i, 'selfie'],
+    [/^portrait$/i,   'portrait'],
+    [/^(ultra.?wide|ultrawide)$/i, 'selfie'], // re-map ultrawide → skip
+  ];
+
+  for (let i = 0; i < allText.length; i++) {
+    const labelText = allText[i].text.replace(/\s*i\s*$/, '').trim(); // strip trailing "i" (info icon)
+    for (const [regex, field] of LABEL_MAP) {
+      if (regex.test(labelText) && (scores as any)[field] === null) {
+        // Look ahead for the first number in range
+        for (let j = i + 1; j < Math.min(i + 5, allText.length); j++) {
+          const n = parseInt(allText[j].text.replace(/\D/g, ''), 10);
+          if (!isNaN(n) && n >= 50 && n <= 200) {
+            (scores as any)[field] = n;
+            break;
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  // Use case scores (Portrait, Lowlight, Zoom) — shown in "Use Cases" section
+  // These appear as numbers in circle elements after "#### Portrait", "#### Lowlight" etc.
+  // They're already captured above via LABEL_MAP matching on h4/h5 text
+
+  // ── Pros and Cons ──────────────────────────────────────────────────────────
+  // Structure: h4 "Pros" → ul > li items, h4 "Cons" → ul > li items
   const strengths: string[] = [];
   const weaknesses: string[] = [];
 
-  $('[class*="pro"] li,[class*="Pro"] li,.pros li,[class*="strength"] li,[class*="advantage"] li').each((_: any, el: any) => {
+  let currentSection = '';
+  $('h4, li').each((_: any, el: any) => {
+    const tag = el.name;
     const txt = $(el).text().trim();
-    if (txt.length > 4) strengths.push(txt);
-  });
-  $('[class*="con"] li,[class*="Con"] li,.cons li,[class*="weakness"] li,[class*="disadvantage"] li').each((_: any, el: any) => {
-    const txt = $(el).text().trim();
-    if (txt.length > 4) weaknesses.push(txt);
+    if (tag === 'h4') {
+      if (/^pros$/i.test(txt)) currentSection = 'pros';
+      else if (/^cons$/i.test(txt)) currentSection = 'cons';
+      else currentSection = '';
+    } else if (tag === 'li' && txt.length > 5) {
+      if (currentSection === 'pros') strengths.push(txt);
+      else if (currentSection === 'cons') weaknesses.push(txt);
+    }
   });
 
-  if (strengths.length === 0 && weaknesses.length === 0) {
-    $('li').each((_: any, el: any) => {
-      const txt = $(el).text().trim();
-      const cls = ($(el).attr('class') || '').toLowerCase();
-      if (cls.includes('pro') || cls.includes('strength') || txt.startsWith('+')) {
-        if (txt.length > 4) strengths.push(txt.replace(/^\+\s*/, ''));
-      } else if (cls.includes('con') || cls.includes('weakness') || txt.startsWith('−') || txt.startsWith('-')) {
-        if (txt.length > 4) weaknesses.push(txt.replace(/^[-−]\s*/, ''));
-      }
-    });
-  }
-
-  // ── Rank ───────────────────────────────────────────────────────────────────
-  let rankLabel: string | null = null;
+  // ── Rankings ───────────────────────────────────────────────────────────────
+  // "29th\nin\nGlobal Ranking" — rank number appears before "in\n[Global Ranking]"
   let rankPosition: number | null = null;
+  let rankLabel: string | null = null;
+  let rankSegment: string | null = null;
 
-  $('[class*="rank"],[class*="Rank"],[class*="position"]').each((_: any, el: any) => {
-    if (rankLabel) return false;
+  // Find all links with "Global Ranking" or "Ultra-Premium Ranking" text
+  $('a').each((_: any, el: any) => {
     const txt = $(el).text().trim();
-    const m = txt.match(/#?(\d+)\s*(best|top|smartphone)/i);
-    if (m) { rankPosition = parseInt(m[1], 10); rankLabel = txt; }
+    if (txt.includes('Global Ranking') || txt.includes('Ultra-Premium Ranking')) {
+      // The rank number is in the preceding sibling text nodes
+      const parent = $(el).parent();
+      const parentText = parent.text().trim();
+      const m = parentText.match(/(\d+)(st|nd|rd|th)/i);
+      if (m) {
+        const pos = parseInt(m[1], 10);
+        if (!rankPosition || txt.includes('Global')) {
+          rankPosition = pos;
+          rankLabel = `#${pos} in ${txt}`;
+          if (txt.includes('Ultra-Premium')) rankSegment = txt;
+        }
+      }
+    }
+  });
+
+  // ── Label (GOLD/SILVER etc.) + year ───────────────────────────────────────
+  // "2025" appears near the score badge
+  let labelYear: string | null = null;
+  let labelType: string | null = null;
+  $('*').each((_: any, el: any) => {
+    if ($(el).children().length > 0) return;
+    const txt = $(el).text().trim();
+    if (/^20\d\d$/.test(txt)) labelYear = txt;
+    if (/^(gold|silver|bronze|recommended)$/i.test(txt)) labelType = txt.toUpperCase();
   });
 
   return {
     device, url: pageUrl, overallScore, scores,
-    strengths: [...new Set(strengths)].slice(0, 12),
-    weaknesses: [...new Set(weaknesses)].slice(0, 12),
-    rankLabel, rankPosition,
-    scrapedAt: new Date().toISOString(), _source: 'html',
-  };
+    strengths: [...new Set(strengths)].slice(0, 15),
+    weaknesses: [...new Set(weaknesses)].slice(0, 15),
+    rankLabel,
+    rankPosition,
+    rankSegment,
+    labelYear,
+    labelType,
+    scrapedAt: new Date().toISOString(),
+    _source: 'html',
+  } as any;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -540,8 +605,8 @@ export async function scrapeDxoPage(pageUrl: string): Promise<IDxoScore> {
 
   const FAILED: IDxoScore = {
     device: '', url: pageUrl, overallScore: null,
-    scores: { photo: null, video: null, audio: null, display: null, zoom: null, bokeh: null, lowLight: null, selfie: null },
-    strengths: [], weaknesses: [], rankLabel: null, rankPosition: null,
+    scores: { photo: null, video: null, audio: null, display: null, zoom: null, bokeh: null, lowLight: null, selfie: null, portrait: null },
+    strengths: [], weaknesses: [], rankLabel: null, rankPosition: null, rankSegment: null, labelType: null, labelYear: null,
     scrapedAt: new Date().toISOString(), _source: 'failed',
   };
 
