@@ -1121,33 +1121,33 @@ app.get('/phone', async (request, reply) => {
     } catch { /* opinions page failed */ }
   }
 
-  // Google search fallback:
-  // When GSMArena's own pages don't link to the camera article, just Google it.
-  // "vivo iQOO Z7 Pro camera samples site:gsmarena.com" -> first result is the article.
+  // DuckDuckGo search fallback:
+  // Only runs when no camera samples found (review_url missing or didn't yield samples).
+  // DuckDuckGo HTML endpoint has no rate limits, no API key, completely free.
+  // Query: "vivo iQOO Z7 Pro camera samples site:gsmarena.com"
   if (cameraSamples.length === 0) {
     try {
       const { getHtml } = await import('../src/parser/parser.service');
       const { load } = await import('cheerio');
 
-      const googleQuery = encodeURIComponent(`${bestMatch.name} camera samples site:gsmarena.com`);
-      const googleUrl = `https://www.google.com/search?q=${googleQuery}&num=5`;
-      debug.steps.push({ action: 'google_search', query: `${bestMatch.name} camera samples site:gsmarena.com` });
+      const ddgQuery = encodeURIComponent(`${bestMatch.name} camera samples site:gsmarena.com`);
+      const ddgUrl = `https://html.duckduckgo.com/html/?q=${ddgQuery}`;
+      debug.steps.push({ action: 'ddg_search', query: `${bestMatch.name} camera samples site:gsmarena.com` });
 
-      const googleHtml = await getHtml(googleUrl);
-      const $g = load(googleHtml);
+      const ddgHtml = await getHtml(ddgUrl);
+      const $d = load(ddgHtml);
 
-      // Extract gsmarena.com links from Google results — Google wraps them as /url?q=https://...
+      // DDG HTML results: links are in <a class="result__url"> or <a class="result__a">
+      // with href pointing directly to the target URL (no redirect wrapping like Google)
       const gsmarenaLinks: string[] = [];
-      $g('a[href]').each((_: number, el: any) => {
-        const href: string = $g(el).attr('href') || '';
-        const match = href.match(/[?&]q=(https?:\/\/(?:www\.)?gsmarena\.com\/[^&]+\.php)/);
-        if (match) {
-          const url = decodeURIComponent(match[1]);
-          if (!gsmarenaLinks.includes(url)) gsmarenaLinks.push(url);
+      $d('a.result__a, a.result__url').each((_: number, el: any) => {
+        const href: string = $d(el).attr('href') || '';
+        if (href.includes('gsmarena.com') && href.endsWith('.php')) {
+          if (!gsmarenaLinks.includes(href)) gsmarenaLinks.push(href);
         }
       });
 
-      debug.steps.push({ action: 'google_gsmarena_links', links: gsmarenaLinks.slice(0, 5) });
+      debug.steps.push({ action: 'ddg_gsmarena_links', links: gsmarenaLinks.slice(0, 5) });
 
       for (const link of gsmarenaLinks) {
         const lower = link.toLowerCase();
@@ -1155,12 +1155,12 @@ app.get('/phone', async (request, reply) => {
         if (await tryCameraUrl(link)) {
           specs.review_url = link;
           debug.review_url = link;
-          debug.steps.push({ action: 'google_fallback_found', url: link });
+          debug.steps.push({ action: 'ddg_fallback_found', url: link });
           break;
         }
       }
     } catch (e: any) {
-      debug.steps.push({ action: 'google_search_error', error: (e as any)?.message });
+      debug.steps.push({ action: 'ddg_search_error', error: (e as any)?.message });
     }
   }
 
