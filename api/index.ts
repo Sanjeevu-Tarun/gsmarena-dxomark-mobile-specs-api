@@ -1362,11 +1362,7 @@ app.get('/dxomark/debug', async (request, reply) => {
 
   return { name, brand, model, url, fetchStatus, fetchError, hasNextData, bodyPreview };
 });
- * overall, photo, video, audio, display, strengths/weaknesses, rank label.
- *
- * Strategy: tries canonical slug first (brand-model-test/), falls back to
- * DXOMark's search if the direct URL 404s.
- */
+
 app.get('/dxomark', async (request, reply) => {
   const name = (request.query as any).name;
   if (!name) {
