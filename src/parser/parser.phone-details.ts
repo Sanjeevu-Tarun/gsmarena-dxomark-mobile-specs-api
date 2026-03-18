@@ -405,12 +405,33 @@ export async function getPhoneDetails(slug: string): Promise<IPhoneDetails> {
       }
     });
     
+    // ── Sibling device slugs ──────────────────────────────────────────────────
+    // Collect links to OTHER device spec pages on this page (e.g. "Also check", related phones).
+    // Used by the fallback in index.ts to find variant slugs (e.g. _5g) when all else fails.
+    const siblingSlugTokens = slug.toLowerCase().replace(/-\d+$/, '').split('_')
+      .filter((t: string) => t.length > 1);
+    const siblingDeviceSlugs: string[] = [];
+    $('a[href]').each((_, el) => {
+      const href = ($(el).attr('href') || '').replace(/\.php$/, '').replace(/^\//, '');
+      // Must look like a device slug: lowercase letters/numbers/underscores then dash then numbers
+      if (!/^[a-z0-9_]+-\d+$/.test(href)) return;
+      if (href === slug) return; // skip self
+      // Must share at least 2 tokens with our slug (to avoid unrelated devices)
+      const hrefTokens = href.replace(/-\d+$/, '').split('_');
+      const shared = siblingSlugTokens.filter((t: string) => hrefTokens.includes(t)).length;
+      if (shared >= 2 && !siblingDeviceSlugs.includes(href)) {
+        siblingDeviceSlugs.push(href);
+      }
+    });
+    console.log(`[getPhoneDetails] siblingDeviceSlugs for ${slug}:`, siblingDeviceSlugs);
+
     return { 
       brand, 
       model, 
       imageUrl: hdImageUrl || imageUrl,  // HD press photo if available, else bigpic
       device_images,
       review_url,
+      siblingDeviceSlugs,
       release_date, 
       dimensions, 
       os, 

@@ -338,8 +338,7 @@ const LANDING_HTML = `<!DOCTYPE html>
   <header>
     <div class="tag">REST API &middot; GSMArena Scraper</div>
     <h1>Mobile<br><span>Specs</span> API</h1>
-    <p class="subtitle">Scrape GSMArena device specs, reviews, camera samples, and brand listings. No key required.</p>
-    <div class="base-url">
+
       <span class="label">Base URL</span>
       <span id="baseUrl">https://your-deployment.vercel.app</span>
     </div>
@@ -1127,61 +1126,23 @@ app.get('/phone', async (request, reply) => {
   }
 
   if (cameraSamples.length === 0) {
-    // Fallback 2: Fetch the brand page (e.g. vivo-phones-98.php) to find variant slugs.
-    // GSMArena search doesn't surface _5g variants, but the brand listing page has all of them.
-    // We find the brand page URL from the search results (it's always in the sidebar).
-    try {
-      const { getHtml } = await import('../src/parser/parser.service');
-      const { load } = await import('cheerio');
+    // Fallback 2: Use sibling device slugs found directly on the specs page.
+    // GSMArena specs pages often link to variant pages in "See also" / related sections.
+    // e.g. vivo_iqoo_z7_pro specs page links to vivo_iqoo_z7_pro_5g.
+    // We check those sibling opinions pages for camera/review links.
+    const siblingDeviceSlugs: string[] = (specs as any).siblingDeviceSlugs || [];
+    debug.steps.push({ action: 'sibling_slugs', slugs: siblingDeviceSlugs });
 
-      // The brand is the first token of the device slug: "vivo_iqoo_z7_pro-12484" -> "vivo"
-      const brandSlug = deviceSlug.split('_')[0];
-      // Model tokens we need ALL variants to contain: ["iqoo","z7","pro"]
-      const slugBase = deviceSlug.replace(/-\d+$/, '');
-      const modelTokens = slugBase.split('_').filter((t: string) => t.length > 1 && t !== brandSlug);
+    if (siblingDeviceSlugs.length > 0) {
+      try {
+        const { getHtml } = await import('../src/parser/parser.service');
+        const { load } = await import('cheerio');
 
-      // Find the brand page URL via a search — it always appears as "{brand}-phones-{id}.php"
-      const searchHtml = await getHtml(
-        `https://www.gsmarena.com/results.php3?sQuickSearch=yes&sName=${encodeURIComponent(deviceSlug.replace(/-\d+$/, '').replace(/_/g, ' '))}`
-      );
-      const $s = load(searchHtml);
-      let brandPageUrl = '';
-      $s('a[href]').each((_: number, el: any) => {
-        const href = $s(el).attr('href') || '';
-        if (href.match(new RegExp(`^${brandSlug}-phones-\\d+\\.php$`))) {
-          brandPageUrl = `https://www.gsmarena.com/${href}`;
-          return false;
-        }
-      });
-
-      debug.steps.push({ action: 'brand_page_lookup', brandSlug, modelTokens, brandPageUrl });
-
-      if (!brandPageUrl) {
-        debug.steps.push({ action: 'brand_page_not_found' });
-      } else {
-        const brandHtml = await getHtml(brandPageUrl);
-        const $b = load(brandHtml);
-
-        // Find all device slugs on the brand page that contain all our model tokens
-        const relatedSlugs: string[] = [];
-        $b('.makers ul li a[href]').each((_: number, el: any) => {
-          const href = $b(el).attr('href') || '';
-          const slug = href.replace(/\.php$/, '').replace(/^\//, '');
-          if (slug === deviceSlug) return; // skip the one we already tried
-          if (!/^[a-z0-9_]+-\d+$/.test(slug)) return;
-          const slugLower = slug.toLowerCase();
-          if (modelTokens.every((t: string) => slugLower.includes(t))) {
-            relatedSlugs.push(slug);
-          }
-        });
-
-        debug.steps.push({ action: 'brand_related_slugs', slugs: relatedSlugs });
-
-        for (const relSlug of relatedSlugs.slice(0, 5)) {
-          const m = relSlug.match(/^(.+)-(\d+)$/);
+        for (const sibSlug of siblingDeviceSlugs.slice(0, 5)) {
+          const m = sibSlug.match(/^(.+)-(\d+)$/);
           if (!m) continue;
           const opinionsUrl = `https://www.gsmarena.com/${m[1]}-opinions-${m[2]}.php`;
-          debug.steps.push({ action: 'brand_opinions_attempt', url: opinionsUrl });
+          debug.steps.push({ action: 'sibling_opinions_attempt', url: opinionsUrl });
           try {
             const html = await getHtml(opinionsUrl);
             const $ = load(html);
@@ -1197,23 +1158,23 @@ app.get('/phone', async (request, reply) => {
                 if (!links.includes(full)) links.push(full);
               }
             });
-            debug.steps.push({ action: 'brand_opinions_links', slug: relSlug, count: links.length, links });
+            debug.steps.push({ action: 'sibling_opinions_links', slug: sibSlug, count: links.length, links });
             for (const link of links) {
               if (await tryCameraUrl(link)) {
                 specs.review_url = link;
                 debug.review_url = link;
-                debug.steps.push({ action: 'brand_variant_found', url: link });
+                debug.steps.push({ action: 'sibling_found', url: link });
                 break;
               }
             }
             if (cameraSamples.length > 0) break;
           } catch (e: any) {
-            debug.steps.push({ action: 'brand_opinions_error', slug: relSlug, error: e?.message });
+            debug.steps.push({ action: 'sibling_opinions_error', slug: sibSlug, error: e?.message });
           }
         }
+      } catch (e: any) {
+        debug.steps.push({ action: 'sibling_fallback_error', error: e?.message });
       }
-    } catch (e: any) {
-      debug.steps.push({ action: 'brand_fallback_error', error: e?.message });
     }
   }
 
