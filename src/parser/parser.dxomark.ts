@@ -402,6 +402,18 @@ function parseHtmlFallback(html: string, pageUrl: string, brand: string, model: 
     $('h1').first().text().trim() ||
     `${brand} ${model}`;
 
+  // ── Detect score type — Camera vs Display-only ─────────────────────────────
+  // Score badge text: "151\ncamera\n2025" or "158\ndisplay\n2024"
+  // If page has no Camera tab, all scores are Display scores — flag this clearly.
+  const pageText = $('body').text().toLowerCase();
+  const hasCameraTab = pageText.includes('overall camera score') || 
+                       $('a[href*="sort-camera"]').length > 0 ||
+                       /\d+\s*\n?\s*camera/i.test($('body').text());
+  const hasDisplayOnly = !hasCameraTab && (
+    pageText.includes('overall display score') ||
+    $('a[href*="sort-display"]').length > 0
+  );
+
   // ── Scores section — only look inside #scores or the Scores section ────────
   // The page has Camera and Display tabs. We want Camera scores.
   // Overall score appears as a standalone number "151" in the scores block.
@@ -632,7 +644,12 @@ function parseHtmlFallback(html: string, pageUrl: string, brand: string, model: 
   });
 
   return {
-    device, url: pageUrl, overallScore, scores,
+    device, url: pageUrl,
+    // If display-only page, overallScore is the Display score, not Camera
+    scoreType: hasCameraTab ? 'camera' : (hasDisplayOnly ? 'display' : 'unknown'),
+    noCameraReview: !hasCameraTab,
+    overallScore,
+    scores,
     strengths: [...new Set(strengths)].slice(0, 15),
     weaknesses: [...new Set(weaknesses)].slice(0, 15),
     rankLabel,
