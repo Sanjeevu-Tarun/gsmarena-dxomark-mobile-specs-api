@@ -4,6 +4,7 @@ import { cacheGetWithSource, cacheSet } from '../src/cache';
 import { getPhoneDetails } from '../src/parser/parser.phone-details';
 import { getBrands } from '../src/parser/parser.brands';
 import { getReviewDetails } from '../src/parser/parser.review';
+import { getDxoScores, searchDxo, scrapeDxoPage } from '../src/parser/parser.dxomark';
 import type { IncomingMessage, ServerResponse } from 'http';
 
 const app = Fastify({ logger: false });
@@ -605,8 +606,8 @@ const LANDING_HTML = `<!DOCTYPE html>
   </div>
 
   <footer>
-    <span><span class="status-dot"></span>GSMArena Scraper &middot; Vercel Serverless</span>
-    <span>10 endpoints</span>
+    <span><span class="status-dot"></span>GSMArena + DXOMark Scraper &middot; Vercel Serverless</span>
+    <span>13 endpoints</span>
   </footer>
 </div>
 
@@ -1286,6 +1287,88 @@ app.get('/phone', async (request, reply) => {
   console.log(`[/phone] cached "${normName}" → ${fullCk}`);
 
   return result;
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DXOMark endpoints
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * GET /dxomark?name=samsung galaxy s25 ultra
+ *
+ * Finds the DXOMark page for a device and returns all scores:
+ * overall, photo, video, audio, display, strengths/weaknesses, rank label.
+ *
+ * Strategy: tries canonical slug first (brand-model-test/), falls back to
+ * DXOMark's search if the direct URL 404s.
+ */
+app.get('/dxomark', async (request, reply) => {
+  const name = (request.query as any).name;
+  if (!name) {
+    return reply.status(400).send({
+      status: false,
+      error: 'Query param "name" is required. e.g. /dxomark?name=samsung galaxy s25 ultra',
+    });
+  }
+
+  try {
+    const data = await getDxoScores(name);
+    if (!data) {
+      return reply.status(404).send({
+        status: false,
+        error: `No DXOMark page found for "${name}". Try a more specific device name.`,
+      });
+    }
+    return { status: true, data };
+  } catch (err: any) {
+    return reply.status(500).send({ status: false, error: err?.message || String(err) });
+  }
+});
+
+/**
+ * GET /dxomark/search?query=pixel 9 pro
+ *
+ * Searches DXOMark directly and returns a list of matching device pages
+ * with their scores. Useful for discovery.
+ */
+app.get('/dxomark/search', async (request, reply) => {
+  const query = (request.query as any).query;
+  if (!query) {
+    return reply.status(400).send({
+      status: false,
+      error: 'Query param "query" is required. e.g. /dxomark/search?query=pixel 9',
+    });
+  }
+
+  try {
+    const results = await searchDxo(query);
+    return { status: true, count: results.length, data: results };
+  } catch (err: any) {
+    return reply.status(500).send({ status: false, error: err?.message || String(err) });
+  }
+});
+
+/**
+ * GET /dxomark/url?url=https://www.dxomark.com/samsung-galaxy-s25-ultra-test/
+ *
+ * Scrapes a specific DXOMark URL directly. Use this if you already have
+ * the exact DXOMark page URL and want to bypass the search/slug resolution.
+ */
+app.get('/dxomark/url', async (request, reply) => {
+  const url = (request.query as any).url;
+  if (!url || !url.includes('dxomark.com')) {
+    return reply.status(400).send({
+      status: false,
+      error: 'Query param "url" must be a valid dxomark.com URL.',
+    });
+  }
+
+  try {
+    const data = await scrapeDxoPage(url);
+    return { status: true, data };
+  } catch (err: any) {
+    return reply.status(500).send({ status: false, error: err?.message || String(err) });
+  }
 });
 
 // ── /:slug must be LAST –it's a catch-all for device specs ──────────────────
