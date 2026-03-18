@@ -61,13 +61,47 @@ function cleanImgUrl(src: string | undefined): string {
  *
  *   The size token (/-160/, /-216/, /-320/, /-1200/, /-1200w5/) is replaced with /-/-/
  */
+/**
+ * Universal full-resolution URL extractor.
+ *
+ * Instead of regex on size tokens (fragile, breaks on new formats like -x120),
+ * we use path structure: GSMArena always stores full-res images at:
+ *   /imgroot/reviews/<year>/<device>/camera/<filename>
+ * Thumbnails add a size segment before the filename:
+ *   /imgroot/reviews/<year>/<device>/camera/-160/<filename>
+ *   /imgroot/reviews/<year>/<device>/camera/-x120/<filename>
+ *
+ * By splitting on the section path and keeping only the filename,
+ * we get the full-res URL regardless of what size token was used.
+ */
 function thumbToFullRes(thumbUrl: string): string {
   if (!thumbUrl) return '';
-  // GSMArena full-res camera sample URLs have NO size token.
-  // Confirmed from live CDN: /imgroot/reviews/25/google-pixel-10-pro/camera/gsmarena_2105.jpg
-  // Thumbnail: /camera/-160/gsmarena_1101.jpg
-  // Full-res:  /camera/gsmarena_1101.jpg  (strip the /-NNN/ segment)
-  return thumbUrl.replace(/\/-[\dw]+\//, '/');
+  if (!thumbUrl.includes('/imgroot/reviews/')) return thumbUrl;
+
+  // Extract filename (gsmarena_NNNN.jpg or similar number-based filename)
+  const filenameMatch = thumbUrl.match(/(gsmarena_\d+\.\w+)$/);
+  if (!filenameMatch) return thumbUrl;
+  const filename = filenameMatch[1];
+
+  // Find the section path (/camera/, /lifestyle/, /design/, /photos/)
+  const sections = ['/camera/', '/lifestyle/', '/design/', '/photos/'];
+  for (const section of sections) {
+    const idx = thumbUrl.indexOf(section);
+    if (idx !== -1) {
+      return thumbUrl.slice(0, idx + section.length) + filename;
+    }
+  }
+
+  // Fallback: strip any /-token/ segment before the filename
+  return thumbUrl.replace(/\/-[^/]+\/(?=gsmarena_)/, '/');
+}
+
+/** Return true if the URL still has a size token (shouldn't happen with new extractor) */
+function isThumbnailUrl(url: string): boolean {
+  // News article images don't have size tokens — always pass through
+  if (url.includes('/imgroot/news/')) return false;
+  // Check for any path segment that looks like a size token: /-NNN/ or /-xNNN/
+  return /\/-(\d|x\d)[^/]*\//.test(url);
 }
 
 /**
@@ -86,11 +120,15 @@ function isContentImage(src: string): boolean {
 }
 
 /**
- * Is this image URL a camera sample (lives under /imgroot/reviews/…/camera/)?
- * These are the real camera samples — lifestyle/phone/sshots are article images.
+ * Is this image URL a camera sample?
+ * Matches both standard review paths and news article image paths:
+ *   /imgroot/reviews/.../camera/...   <- standard review camera pages
+ *   /imgroot/news/...                 <- news/camera-samples articles (e.g. iQOO Z7 Pro)
  */
 function isCameraSampleImage(src: string): boolean {
-  return src.includes('/imgroot/reviews/') && src.includes('/camera/');
+  if (src.includes('/imgroot/reviews/') && /\/camera\d*\//.test(src)) return true;
+  if (src.includes('/imgroot/news/')) return true;
+  return false;
 }
 
 /**
@@ -130,6 +168,7 @@ async function findCameraPageNumber(baseReviewSlug: string, reviewId: string): P
   try {
     html = await getHtml(reviewUrl);
   } catch {
+    console.error(`[findCameraPageNumber] Failed to fetch ${reviewUrl}`);
     return null;
   }
 
@@ -137,17 +176,43 @@ async function findCameraPageNumber(baseReviewSlug: string, reviewId: string): P
 
   // Look for nav links pointing to pN pages and find the one labelled "camera"
   let cameraPage: number | null = null;
+  
+  console.log(`[findCameraPageNumber] Searching for camera page in ${baseReviewSlug}, reviewId=${reviewId}`);
 
+  // Strategy 1: Look for nav links with camera/photo keywords
+  const navLinks: Array<{href: string, text: string, pageNum: number}> = [];
   $(`a[href*="-review-${reviewId}p"]`).each((_, el) => {
     const href = $(el).attr('href') || '';
     const text = $(el).text().trim().toLowerCase();
     const match = href.match(/-review-\d+p(\d+)\.php/);
     if (!match) return;
     const pageNum = parseInt(match[1], 10);
-    if (/camera|photo|sample/.test(text)) {
+    navLinks.push({ href, text, pageNum });
+    
+    // Match: camera, photo, sample, or "video" + "quality" (allows words between)
+    if (/camera|photo|sample/.test(text) || (text.includes('video') && text.includes('quality'))) {
+      console.log(`[findCameraPageNumber] MATCHED: "${text}" -> page ${pageNum}`);
       cameraPage = pageNum;
     }
   });
+  
+  console.log(`[findCameraPageNumber] Found ${navLinks.length} nav links:`, navLinks.map(l => `p${l.pageNum}: "${l.text}"`));
+  console.log(`[findCameraPageNumber] Camera page from Strategy 1: ${cameraPage}`);
+  
+  // Strategy 2: If not found, look for ANY links containing camera/photo
+  if (cameraPage === null) {
+    $('a').each((_, el) => {
+      const href = $(el).attr('href') || '';
+      const text = $(el).text().trim().toLowerCase();
+      if (!href.includes(`-review-${reviewId}p`)) return;
+      const match = href.match(/-review-\d+p(\d+)\.php/);
+      if (!match) return;
+      const pageNum = parseInt(match[1], 10);
+      if (text.includes('camera') || text.includes('photo') || text.includes('video quality')) {
+        cameraPage = pageNum;
+      }
+    });
+  }
 
   // Fallback: probe pages 2–8 and return the first one that has camera sample images
   if (cameraPage === null) {
@@ -299,6 +364,9 @@ async function scrapeCameraPage(url: string): Promise<ICameraSampleCategory[]> {
     const thumbUrl = cleanImgUrl(src);
     const fullUrl = thumbToFullRes(thumbUrl);
     if (!fullUrl || seen.has(fullUrl)) return;
+    // Safety: if the URL still contains a size token after stripping, skip it
+    // rather than serve a blurry thumbnail to the client
+    if (isThumbnailUrl(fullUrl)) return;
     seen.add(fullUrl);
 
     const caption = $(el).attr('alt') || '';
@@ -312,7 +380,6 @@ async function scrapeCameraPage(url: string): Promise<ICameraSampleCategory[]> {
     categoryMap.get(label)!.push({
       category: label,
       url: fullUrl,
-      thumbnailUrl: thumbUrl,
       caption: caption || undefined,
     });
   });
@@ -434,19 +501,38 @@ async function scrapeLensDetails(cameraPageUrl: string): Promise<ILensDetail[]> 
     if (src && !inlineImages.includes(src)) inlineImages.push(src);
   });
 
-  // Parse the findings list
-  $('ul.article-blurb-findings li, ul.article-blurb.article-blurb-findings li').each((idx, el) => {
-    const $li = $(el);
-    // The role is in the <b> tag at the start: "<b>Wide (main):</b>"
-    const roleRaw = $li.find('b').first().text().replace(/:$/, '').trim();
-    if (!roleRaw) return;
+  // Parse ALL article-blurb-findings lists on this page.
+  // GSMArena sometimes has multiple <ul class="article-blurb article-blurb-findings">
+  // blocks on the same page — one for main camera, one for selfie, etc.
+  // We collect every <li> from every matching list.
+  const cameraRoleRx = /^(wide|telephoto|ultrawide|ultra-wide|front|selfie|periscope|main)/i;
 
-    // Full text of the <li> minus the leading "<b>role:</b> " part
+  // Collect <li> items from every findings list on the page
+  const allLiItems: any[] = [];
+
+  // Strategy 1: explicit class selectors — collect from ALL matching <ul>s
+  $('ul.article-blurb-findings, ul.article-blurb.article-blurb-findings').each((_, ul) => {
+    $(ul).find('li').each((_, li) => allLiItems.push(li));
+  });
+
+  // Strategy 2: if nothing found, scan every <ul> whose first <li> starts with a role <b>
+  if (allLiItems.length === 0) {
+    $('ul').each((_, ul) => {
+      const firstB = $(ul).find('li').first().find('b').first().text().trim();
+      if (cameraRoleRx.test(firstB)) {
+        $(ul).find('li').each((_, li) => allLiItems.push(li));
+      }
+    });
+  }
+
+  allLiItems.forEach((el, idx) => {
+    const $li = $(el);
+    const roleRaw = $li.find('b').first().text().replace(/:$/, '').trim();
+    if (!roleRaw || !cameraRoleRx.test(roleRaw)) return;
+
     const fullText = $li.text().trim();
     const detail = fullText.replace(roleRaw + ':', '').trim();
-
-    // Assign inline image: Wide→first, Telephoto→second, Ultra→third, Front→fourth (if available)
-    const sectionImageUrl = inlineImages[idx] || inlineImages[inlineImages.length - 1] || undefined;
+    const sectionImageUrl = inlineImages[idx] ?? inlineImages[inlineImages.length - 1];
 
     lenses.push({ role: roleRaw, detail, sectionImageUrl });
   });
@@ -455,7 +541,30 @@ async function scrapeLensDetails(cameraPageUrl: string): Promise<ILensDetail[]> 
 }
 
 export async function getReviewDetails(reviewSlug: string): Promise<IReviewResult> {
-  // Normalise to base slug (strip trailing pN)
+  // Detect if this is a news/camera-samples page (not a standard multi-page review)
+  // e.g. vivo_iqoo_z7_pro_5g_camera_samples_specs-news-59639
+  const isNewsPage = reviewSlug.includes('-news-') || reviewSlug.includes('camera_samples');
+
+  // For news/camera-samples pages, the page itself IS the camera page — no sub-pages
+  if (isNewsPage) {
+    const newsUrl = `${baseUrl}/${reviewSlug}.php`;
+    let newsHtml = '';
+    try { newsHtml = await getHtml(newsUrl); } catch { newsHtml = ''; }
+    const cameraSamples = newsHtml ? await scrapeCameraPage(newsUrl) : [];
+    const lensDetails = newsHtml ? await scrapeLensDetails(newsUrl) : [];
+    const firstLifestyle = lensDetails.find(l => l.sectionImageUrl)?.sectionImageUrl;
+    return {
+      device: reviewSlug,
+      reviewSlug,
+      reviewUrl: newsUrl,
+      heroImages: firstLifestyle ? [firstLifestyle] : [],
+      articleImages: [],
+      cameraSamples,
+      lensDetails,
+    };
+  }
+
+  // Standard review — normalise to base slug (strip trailing pN)
   const baseReviewSlug = reviewSlug.replace(/-review-(\d+)p\d+$/, '-review-$1');
   const reviewUrl = `${baseUrl}/${baseReviewSlug}.php`;
 
@@ -489,16 +598,30 @@ export async function getReviewDetails(reviewSlug: string): Promise<IReviewResul
 
   // Find which page has camera samples
   const cameraPageNum = await findCameraPageNumber(baseReviewSlug, reviewId);
+  console.log(`[getReviewDetails] ${baseReviewSlug}: cameraPageNum = ${cameraPageNum}`);
 
-  // Scrape camera samples AND lens details from the camera page
+  // Scrape camera samples from camera page
   let cameraSamples: ICameraSampleCategory[] = [];
-  let lensDetails: ILensDetail[] = [];
   if (cameraPageNum) {
     const cameraUrl = `${baseUrl}/${baseReviewSlug}p${cameraPageNum}.php`;
-    [cameraSamples, lensDetails] = await Promise.all([
-      scrapeCameraPage(cameraUrl),
-      scrapeLensDetails(cameraUrl),
-    ]);
+    console.log(`[getReviewDetails] Scraping camera samples from: ${cameraUrl}`);
+    cameraSamples = await scrapeCameraPage(cameraUrl);
+    console.log(`[getReviewDetails] Got ${cameraSamples.length} categories, ${cameraSamples.reduce((sum, cat) => sum + cat.images.length, 0)} total images`);
+  } else {
+    console.log(`[getReviewDetails] No camera page found for ${baseReviewSlug}`);
+  }
+  // Scrape lens details — try pages in order until we find 2+ lens entries.
+  // GSMArena puts the article-blurb-findings list on p1, p2, or p3 depending on the review.
+  // We need at least 2 entries to be confident we have the full camera breakdown.
+  let lensDetails: ILensDetail[] = [];
+  const pagesToTry = [reviewUrl];
+  for (let pn = 2; pn <= 4; pn++) {
+    pagesToTry.push(`${baseUrl}/${baseReviewSlug}p${pn}.php`);
+  }
+  for (const pageUrl of pagesToTry) {
+    const found = await scrapeLensDetails(pageUrl);
+    if (found.length > lensDetails.length) lensDetails = found;
+    if (lensDetails.length >= 2) break; // found a real camera list
   }
 
   // Scrape article images from non-camera pages (p1, p2, p3, p4 etc.)
