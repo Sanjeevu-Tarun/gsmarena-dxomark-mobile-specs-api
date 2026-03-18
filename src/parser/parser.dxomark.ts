@@ -975,7 +975,7 @@ export async function scrapeDxoReview(reviewUrl: string, nocache = false): Promi
       const fig = $(el).closest('figure');
       if (fig.length) {
         const fc = fig.find('figcaption').first().text().trim();
-        if (fc.length > 4) caption = fc;
+        if (fc.length > 4) caption = fc.replace(/\s+/g, ' ').replace(/,\s*,/g, ',').replace(/,\s*and\s*,/g, ' and').replace(/\(\s*\)/g, '').trim();
       }
 
       // B) next element sibling of parent, or grandparent
@@ -987,7 +987,7 @@ export async function scrapeDxoReview(reviewUrl: string, nocache = false): Promi
         const nextTxt = next.length ? next.clone().find('a,img,figure').remove().end().text().trim() : '';
         // Caption: short, has letters, not a heading-level text
         if (nextTxt.length > 5 && nextTxt.length < 250 && /[a-zA-Z]/.test(nextTxt) && !/^\s*(best|top score|portrait|lowlight|zoom|outdoor|indoor|photo|video)/i.test(nextTxt)) {
-          caption = nextTxt.replace(/\s+/g, ' ').trim();
+          caption = nextTxt.replace(/\s+/g, ' ').replace(/,\s*,/g, ',').replace(/,\s*and\s*,/g, ' and').replace(/\s*,\s*\./g, '.').replace(/\(\s*\)/g, '').trim();
         }
       }
 
