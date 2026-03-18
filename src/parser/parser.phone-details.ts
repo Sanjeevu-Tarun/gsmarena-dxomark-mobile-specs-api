@@ -22,12 +22,22 @@ function normalizeBrand(slug: string): string {
     .replace(/_5g$/, '');          // Remove _5g suffix
 
   // Remove brand prefixes that GSMArena sometimes includes/excludes
+  // IMPORTANT: More specific prefixes MUST come first (xiaomi_poco_ before poco_ before xiaomi_)
   const brandPrefixes = [
-    'xiaomi_poco_', 'xiaomi_', 
-    'vivo_iqoo_', 'vivo_', 
-    'samsung_galaxy_', 'samsung_',
-    'apple_iphone_', 'apple_',
-    'google_pixel_', 'google_',
+    'xiaomi_poco_',
+    'xiaomi_redmi_',
+    'vivo_iqoo_', 
+    'samsung_galaxy_', 
+    'apple_iphone_', 
+    'google_pixel_',
+    'xiaomi_', 
+    'vivo_', 
+    'samsung_',
+    'apple_',
+    'google_',
+    'poco_',  // Standalone poco_ for review links
+    'iqoo_',  // Standalone iqoo_ for review links  
+    'redmi_',
     'oneplus_', 'realme_', 'oppo_', 'honor_', 'motorola_', 'nokia_'
   ];
   
@@ -178,7 +188,7 @@ export async function getPhoneDetails(slug: string): Promise<IPhoneDetails> {
     
     let review_url: string | undefined;
     
-    // Score a href: higher=better
+    // Score a href: higher = better
     function reviewScore(href: string): number {
       if (href.includes('-review-')) return 100;
       if (href.includes('camera_samples') || href.includes('camera-samples')) return 90;
