@@ -127,6 +127,43 @@ function isCameraSampleImage(src: string): boolean {
 }
 
 /**
+ * For GSMArena news/article camera pages (e.g. vivo_iqoo_z7_pro_5g_camera_samples_specs-news-59639.php),
+ * images are stored on different CDN paths than standard review pages:
+ *   - /vv/pics/...
+ *   - /imgroot/news/...
+ *   - /imgroot/articles/...
+ * We accept any real content image from the GSMArena CDN that isn't a UI chrome element.
+ */
+function isNewsPageCameraImage(src: string): boolean {
+  if (!src) return false;
+  if (!isContentImage(src)) return false;
+  // Skip obvious non-sample images
+  if (/icon|logo|spacer|blank|pixel\.gif|arrow/.test(src)) return false;
+  // Must be from GSMArena CDN
+  if (!src.includes('gsmarena.com')) return false;
+  // Accept standard review camera images
+  if (isCameraSampleImage(src)) return true;
+  // Accept news/article CDN paths
+  if (src.includes('/vv/pics/')) return true;
+  if (src.includes('/imgroot/news/')) return true;
+  if (src.includes('/imgroot/articles/')) return true;
+  return false;
+}
+
+/**
+ * Derive full-res URL for news-page images (e.g. /vv/pics/...).
+ * These may have size suffixes like -NN appended before the extension.
+ * Strip trailing -NNN size suffix from the base filename if present.
+ * e.g. /vv/pics/vivo/iqoo-z7-pro/photo-640.jpg -> /vv/pics/vivo/iqoo-z7-pro/photo.jpg
+ */
+function newsImageToFullRes(src: string): string {
+  // If it's a standard review image, use the existing extractor
+  if (src.includes('/imgroot/reviews/')) return thumbToFullRes(src);
+  // For /vv/pics/ and similar: strip size suffix like -640, -1200 before extension
+  return src.replace(/-\d+(\.[a-z]+)$/i, '$1');
+}
+
+/**
  * Normalise a raw tab / heading label into a canonical category string.
  */
 function normaliseCategory(raw: string): string {
@@ -339,7 +376,7 @@ function categoryFromCaption(caption: string): string {
  * - Full-res pattern:       /imgroot/reviews/26/<device>/camera/-/-/gsmarena_XXXX.jpg
  * - Category is determined from the <img alt="..."> caption text
  */
-async function scrapeCameraPage(url: string): Promise<ICameraSampleCategory[]> {
+async function scrapeCameraPage(url: string, isNewsPage = false): Promise<ICameraSampleCategory[]> {
   let html: string;
   try {
     html = await getHtml(url);
@@ -352,16 +389,33 @@ async function scrapeCameraPage(url: string): Promise<ICameraSampleCategory[]> {
   const seen = new Set<string>();
 
   $('img').each((_, el) => {
+    // Check both src and data-src (news pages lazy-load via data-src)
     const src = $(el).attr('src') || $(el).attr('data-src') || '';
-    // Only process real camera sample images (under /camera/ path)
-    if (!isCameraSampleImage(src)) return;
+    // Use relaxed detection for news/article pages; strict for standard review pages
+    const isValid = isNewsPage ? isNewsPageCameraImage(src) : isCameraSampleImage(src);
+    if (!isValid) return;
 
     const thumbUrl = cleanImgUrl(src);
-    const fullUrl = thumbToFullRes(thumbUrl);
+
+    // For news pages: prefer the parent <a href> as the full-res URL when available
+    // (GSMArena news articles wrap camera sample thumbs in a link to the original photo)
+    let fullUrl: string;
+    if (isNewsPage) {
+      const parentHref = $(el).closest('a').attr('href') || '';
+      const absHref = cleanImgUrl(parentHref);
+      // Use parent href only if it looks like a real image URL (not "#" or a page link)
+      if (absHref && absHref !== '#' && /\.(jpe?g|png|webp)$/i.test(absHref) && isContentImage(absHref)) {
+        fullUrl = absHref;
+      } else {
+        fullUrl = newsImageToFullRes(thumbUrl);
+      }
+    } else {
+      fullUrl = thumbToFullRes(thumbUrl);
+    }
+
     if (!fullUrl || seen.has(fullUrl)) return;
-    // Safety: if the URL still contains a size token after stripping, skip it
-    // rather than serve a blurry thumbnail to the client
-    if (isThumbnailUrl(fullUrl)) return;
+    // For standard review pages only: skip if size token still present (blurry thumbnail)
+    if (!isNewsPage && isThumbnailUrl(fullUrl)) return;
     seen.add(fullUrl);
 
     const caption = $(el).attr('alt') || '';
@@ -545,7 +599,7 @@ export async function getReviewDetails(reviewSlug: string): Promise<IReviewResul
     const newsUrl = `${baseUrl}/${reviewSlug}.php`;
     let newsHtml = '';
     try { newsHtml = await getHtml(newsUrl); } catch { newsHtml = ''; }
-    const cameraSamples = newsHtml ? await scrapeCameraPage(newsUrl) : [];
+    const cameraSamples = newsHtml ? await scrapeCameraPage(newsUrl, true) : [];
     const lensDetails = newsHtml ? await scrapeLensDetails(newsUrl) : [];
     const firstLifestyle = lensDetails.find(l => l.sectionImageUrl)?.sectionImageUrl;
     return {
