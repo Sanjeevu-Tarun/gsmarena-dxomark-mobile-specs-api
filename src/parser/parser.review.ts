@@ -76,15 +76,16 @@ function cleanImgUrl(src: string | undefined): string {
  */
 function thumbToFullRes(thumbUrl: string): string {
   if (!thumbUrl) return '';
-  if (!thumbUrl.includes('/imgroot/reviews/')) return thumbUrl;
+  // Handle all /imgroot/ CDN paths: /imgroot/reviews/, /imgroot/news/, /imgroot/articles/
+  if (!thumbUrl.includes('/imgroot/')) return thumbUrl;
 
   // Extract filename (gsmarena_NNNN.jpg or similar number-based filename)
   const filenameMatch = thumbUrl.match(/(gsmarena_\d+\.\w+)$/);
   if (!filenameMatch) return thumbUrl;
   const filename = filenameMatch[1];
 
-  // Find the section path (/camera/, /lifestyle/, /design/, /photos/)
-  const sections = ['/camera/', '/lifestyle/', '/design/', '/photos/'];
+  // Find the section path — news pages use /camera/ and /inline/ in addition to review sections
+  const sections = ['/camera/', '/inline/', '/lifestyle/', '/design/', '/photos/'];
   for (const section of sections) {
     const idx = thumbUrl.indexOf(section);
     if (idx !== -1) {
@@ -92,7 +93,7 @@ function thumbToFullRes(thumbUrl: string): string {
     }
   }
 
-  // Fallback: strip any /-token/ segment before the filename
+  // Fallback: strip any /-token/ segment before the filename (covers -184x111, -160, -1200w1 etc.)
   return thumbUrl.replace(/\/-[^/]+\/(?=gsmarena_)/, '/');
 }
 
@@ -137,16 +138,21 @@ function isCameraSampleImage(src: string): boolean {
 function isNewsPageCameraImage(src: string): boolean {
   if (!src) return false;
   if (!isContentImage(src)) return false;
-  // Skip obvious non-sample images
-  if (/icon|logo|spacer|blank|pixel\.gif|arrow/.test(src)) return false;
   // Must be from GSMArena CDN
   if (!src.includes('gsmarena.com')) return false;
+  // Skip obvious non-sample images
+  if (/icon|logo|spacer|blank|pixel\.gif|arrow/.test(src)) return false;
+  // REJECT: article card thumbnails — always /-NNNxNNN/ format (e.g. /-184x111/)
+  // These appear in related-articles sidebars and are never camera samples
+  if (/\/-\d+x\d+\//.test(src)) return false;
   // Accept standard review camera images
   if (isCameraSampleImage(src)) return true;
-  // Accept news/article CDN paths
+  // Accept news/article CDN paths — but only /camera/ and /inline/ sections
+  // (these are the actual sample image directories on news pages)
+  if (src.includes('/imgroot/news/') && (src.includes('/camera/') || src.includes('/inline/'))) return true;
+  if (src.includes('/imgroot/articles/') && (src.includes('/camera/') || src.includes('/inline/'))) return true;
+  // Accept /vv/pics/ (device press shots used on some news camera pages)
   if (src.includes('/vv/pics/')) return true;
-  if (src.includes('/imgroot/news/')) return true;
-  if (src.includes('/imgroot/articles/')) return true;
   return false;
 }
 
@@ -157,9 +163,9 @@ function isNewsPageCameraImage(src: string): boolean {
  * e.g. /vv/pics/vivo/iqoo-z7-pro/photo-640.jpg -> /vv/pics/vivo/iqoo-z7-pro/photo.jpg
  */
 function newsImageToFullRes(src: string): string {
-  // If it's a standard review image, use the existing extractor
-  if (src.includes('/imgroot/reviews/')) return thumbToFullRes(src);
-  // For /vv/pics/ and similar: strip size suffix like -640, -1200 before extension
+  // thumbToFullRes now handles all /imgroot/ paths (reviews, news, articles)
+  if (src.includes('/imgroot/')) return thumbToFullRes(src);
+  // For /vv/pics/ and similar non-imgroot paths: strip size suffix like -640, -1200 before extension
   return src.replace(/-\d+(\.[a-z]+)$/i, '$1');
 }
 
