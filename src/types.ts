@@ -103,3 +103,20 @@ export interface IReviewResult {
     lensDetails: ILensDetail[];
 }
   
+/** One color variant from the GSMArena pictures page 3D model section */
+export interface IColorVariant {
+    colorName: string;
+    /** Full-res image URL for this color */
+    imageUrl: string;
+    isDefault: boolean;
+}
+
+/** All data scraped from the GSMArena pictures page */
+export interface IPicturesPageData {
+    /** All full-resolution /vv/pics/ press render URLs */
+    officialImages: string[];
+    /** Color variants scraped from the 3D model section */
+    colorVariants: IColorVariant[];
+    /** The URL of the pictures page itself (used for 3D WebView) */
+    picturesPageUrl: string;
+}

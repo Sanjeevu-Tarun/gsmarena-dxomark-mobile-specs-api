@@ -1,4 +1,4 @@
-import { IPhoneDetails, IDeviceImage } from "../types";
+import { IPhoneDetails, IDeviceImage, IColorVariant, IPicturesPageData } from "../types";
 import * as cheerio from 'cheerio';
 import { baseUrl } from "../server";
 import { TSpecCategory } from "../types";
@@ -297,71 +297,83 @@ export async function getPhoneDetails(slug: string): Promise<IPhoneDetails> {
       }
     });
 
-    // Scrape the first HD photo from the pictures gallery page.
+    // ── Scrape pictures page: ALL official images + color variants ────────────
     //
-    // GSMArena pictures pages have two sections:
-    //   1. "Official images" — fdn2.gsmarena.com/vv/pics/<brand>/<model>-1.jpg
-    //      These are full-resolution press renders served as-is (no size token).
-    //      ← THIS IS WHAT WE WANT.
-    //   2. Review/sidebar thumbnails — fdn.gsmarena.com/imgroot/reviews/.../-347x151/gsmarena_002.jpg
-    //      These are small cropped stills from review articles, NOT device press shots.
-    //      ← We must skip these.
+    // GSMArena pictures pages have:
+    //   1. "Official images" — fdn2.gsmarena.com/vv/pics/<brand>/<model>-N.jpg
+    //      Full-resolution press renders (front, back, side, angle shots).
+    //      We collect ALL of them, not just the first.
+    //   2. 3D model viewer — color variant <li> chips with data-seo-image="URL"
+    //      Each chip has the color name and a representative full-res image URL.
+    //      We collect these for the color picker UI.
+    //   3. Review sidebar thumbnails (imgroot) — small cropped stills, skipped.
     //
-    // Strategy (highest priority first):
-    //   Pass 1: /vv/pics/ on fdn2.gsmarena.com — official press images, already full-res, use as-is.
-    //   Pass 2: /imgroot/ path with /photos/ or /design/ segment — full-res via /-/-/ token swap.
-    //   Pass 3: any /imgroot/ path that isn't a review/lifestyle thumbnail — /-/-/ token swap.
     let hdImageUrl: string | undefined;
+    let officialImages: string[] = [];
+    let colorVariants: IColorVariant[] = [];
+
     if (picturesPageUrl) {
       try {
         const picHtml = await getHtml(picturesPageUrl);
         const $pic = cheerio.load(picHtml);
 
-        // Pass 1 — /vv/pics/ official press images (fdn2.gsmarena.com).
-        // These are the numbered images in the "official images" section of the pictures page
-        // (e.g. /vv/pics/samsung/samsung-galaxy-s25-ultra-sm-s938-1.jpg).
-        // They are already full-resolution — use the URL exactly as scraped, no transformation.
+        // ── Pass 1: collect ALL /vv/pics/ full-res press renders ───────────
         $pic('img').each((_, el) => {
           const src = $pic(el).attr('src') || $pic(el).attr('data-src') || '';
           if (src.includes('/vv/pics/') && src.includes('gsmarena.com') && src.match(/\.jpe?g$/i)) {
-            hdImageUrl = src;
-            return false; // take first match
+            if (!officialImages.includes(src)) officialImages.push(src);
+          }
+        });
+        // First official image is the hero
+        if (officialImages.length > 0) hdImageUrl = officialImages[0];
+
+        // ── Pass 2: color variants from the 3D model section ───────────────
+        // GSMArena renders color chips as <li data-seo-image="URL">ColorName</li>
+        // under selectors like ul.color-list, #model-3d ul, or .model-3d ul
+        $pic('ul.color-list li, #model-3d li, .model-3d li, [class*="color-list"] li').each((idx, el) => {
+          const $li   = $pic(el);
+          const imgUrl = ($li.attr('data-seo-image') || $li.attr('data-image') || '').trim();
+          const colorName = ($li.attr('title') || $li.find('span').text() || $li.text()).trim();
+          if (colorName && imgUrl && imgUrl.startsWith('http')) {
+            colorVariants.push({ colorName, imageUrl: imgUrl, isDefault: idx === 0 });
           }
         });
 
-        if (!hdImageUrl) {
-          // Helper: true for clean press-render imgroot paths (excludes review/lifestyle shots)
-          const isCleanImgroot = (src: string) =>
-            src.includes('/imgroot/') &&
-            src.includes('gsmarena.com') &&
-            !src.includes('/reviews/') &&
-            !src.includes('/camera') &&
-            !src.includes('/lifestyle/') &&
-            !src.includes('/inline/');
+        // ── Fallback: infer color names from inline JS color array ─────────
+        // GSMArena embeds: var colors = ["Titanium Black","Titanium Gray",...];
+        if (colorVariants.length === 0 && officialImages.length > 0) {
+          const scriptBlob = $pic('script').map((_, el) => $pic(el).html() || '').get().join('\n');
+          const colorsMatch = scriptBlob.match(/(?:var\s+colors|"colors")\s*[=:]\s*\[([^\]]+)\]/);
+          if (colorsMatch) {
+            const names = Array.from(colorsMatch[1].matchAll(/"([^"]+)"/g)).map(m => m[1]);
+            names.forEach((name, idx) => {
+              const imgUrl = officialImages[idx] || officialImages[0];
+              if (name && imgUrl) colorVariants.push({ colorName: name, imageUrl: imgUrl, isDefault: idx === 0 });
+            });
+          }
+        }
 
-          // Pass 2 — /imgroot/ path that explicitly signals a press photo (/photos/ or /design/)
+        // ── Pass 3: imgroot fallback if no /vv/pics/ found ─────────────────
+        if (!hdImageUrl) {
+          const isCleanImgroot = (src: string) =>
+            src.includes('/imgroot/') && src.includes('gsmarena.com') &&
+            !src.includes('/reviews/') && !src.includes('/camera') &&
+            !src.includes('/lifestyle/') && !src.includes('/inline/');
+
           let foundThumb: string | undefined;
           $pic('img').each((_, el) => {
             const src = $pic(el).attr('src') || $pic(el).attr('data-src') || '';
             if (isCleanImgroot(src) && (src.includes('/photos/') || src.includes('/design/'))) {
-              foundThumb = src;
-              return false;
+              foundThumb = src; return false;
             }
           });
-
-          // Pass 3 — any non-lifestyle, non-review imgroot
           if (!foundThumb) {
             $pic('img').each((_, el) => {
               const src = $pic(el).attr('src') || $pic(el).attr('data-src') || '';
-              if (isCleanImgroot(src)) {
-                foundThumb = src;
-                return false;
-              }
+              if (isCleanImgroot(src)) { foundThumb = src; return false; }
             });
           }
-
           if (foundThumb) {
-            // Replace any size token (/-160/, /-1200/, /-1200w5/, /-347x151/) with /-/-/ for full-res
             hdImageUrl = foundThumb.replace(/\/-[^/]+\/(?=[^/]+\.jpe?g$)/i, '/-/-/');
           }
         }
@@ -437,6 +449,13 @@ export async function getPhoneDetails(slug: string): Promise<IPhoneDetails> {
     });
     console.log(`[getPhoneDetails] specificTokens for ${slug}:`, matchTokens, '→ siblings:', siblingDeviceSlugs);
 
+    // Build picturesPageData bundle
+    const picturesPageData: IPicturesPageData | undefined = picturesPageUrl ? {
+      officialImages,
+      colorVariants,
+      picturesPageUrl,
+    } : undefined;
+
     return { 
       brand, 
       model, 
@@ -449,5 +468,6 @@ export async function getPhoneDetails(slug: string): Promise<IPhoneDetails> {
       os, 
       storage, 
       specifications,
+      picturesPageData,
     };
   }

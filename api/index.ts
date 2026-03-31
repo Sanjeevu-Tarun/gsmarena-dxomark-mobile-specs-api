@@ -1353,6 +1353,11 @@ app.get('/phone', async (request, reply) => {
       hdImageUrl,
       cameraSamples,
       lensDetails,
+      // Pictures-page data: all official press images, color variants, and the
+      // pictures page URL (used by the app to open the 3D WebView viewer)
+      officialImages: specs.picturesPageData?.officialImages ?? [],
+      colorVariants:  specs.picturesPageData?.colorVariants  ?? [],
+      picturesPageUrl: specs.picturesPageData?.picturesPageUrl ?? null,
     },
     debug,
   };
