@@ -306,32 +306,44 @@ export async function getPhoneDetails(slug: string): Promise<IPhoneDetails> {
         const picHtml = await getHtml(picturesPageUrl);
         const $pic = cheerio.load(picHtml);
 
-        // Strategy 1: imgroot thumbnail in any <img> — convert size token to full-res
+        // GSMArena pictures pages mix clean press renders with lifestyle/inline shots.
+        // We want the clean press render — skip lifestyle and camera paths.
+        // Path clues: /photos/ or /design/ = clean render; /lifestyle/ /inline/ /camera = skip.
+
+        const isCleanRender = (src: string) =>
+          src.includes('/imgroot/') &&
+          src.includes('gsmarena.com') &&
+          !src.includes('/camera') &&
+          !src.includes('/lifestyle/') &&
+          !src.includes('/inline/');
+
+        // Pass 1: prefer /photos/ or /design/ path
         let foundThumb: string | undefined;
         $pic('img').each((_, el) => {
           const src = $pic(el).attr('src') || $pic(el).attr('data-src') || '';
-          if (src.includes('/imgroot/') && src.includes('gsmarena.com')) {
+          if (isCleanRender(src) && (src.includes('/photos/') || src.includes('/design/'))) {
             foundThumb = src;
-            return false; // take first
+            return false;
           }
         });
-        if (foundThumb) {
-          // /-160/ or /-1200/ -> /-/-/ (any size token -> original full-res)
-          hdImageUrl = foundThumb.replace(/\/-\d+[^/]*\/(?=[^/]+$)/, '/-/-/');
-        }
 
-        // Strategy 2: lightbox <a href> with full-res imgroot
-        if (!hdImageUrl) {
-          $pic('a[href]').each((_, el) => {
-            const href = $pic(el).attr('href') || '';
-            if (href.includes('/imgroot/') && href.includes('gsmarena.com')) {
-              hdImageUrl = href;
+        // Pass 2: any non-lifestyle imgroot
+        if (!foundThumb) {
+          $pic('img').each((_, el) => {
+            const src = $pic(el).attr('src') || $pic(el).attr('data-src') || '';
+            if (isCleanRender(src)) {
+              foundThumb = src;
               return false;
             }
           });
         }
 
-        // Strategy 3: /vv/pics/ without size suffix — better than bigpic
+        if (foundThumb) {
+          // Replace any size token (/-160/, /-1200/, /-1200w5/) with /-/-/ for full-res
+          hdImageUrl = foundThumb.replace(/\/-[^/]+\/(?=[^/]+\.jpg$)/, '/-/-/');
+        }
+
+        // Fallback: /vv/pics/ URL (better than bigpic, always a clean device shot)
         if (!hdImageUrl) {
           $pic('img').each((_, el) => {
             const src = $pic(el).attr('src') || '';

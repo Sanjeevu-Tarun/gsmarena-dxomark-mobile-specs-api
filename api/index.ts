@@ -1064,7 +1064,15 @@ app.get('/phone', async (request, reply) => {
   // Step 3 – scrape camera samples
   let cameraSamples: any[] = [];
   let lensDetails: any[] = [];
-  let hdImageUrl: string | null = specs.imageUrl || null;
+  // hdImageUrl = a genuine HD photo from the pictures gallery page (set by parser.phone-details).
+  // Do NOT fall back to specs.imageUrl here — that's just the bigpic (~300px), same as
+  // device_images[0].url. The app already has that. Only set hdImageUrl when we have
+  // something meaningfully better (full-res imgroot from pictures page).
+  let hdImageUrl: string | null = null;
+  // If parser already found an HD image (from pictures page), use it.
+  if (specs.imageUrl && specs.imageUrl.includes('/imgroot/') && !specs.imageUrl.includes('/lifestyle/') && !specs.imageUrl.includes('/inline/') && !specs.imageUrl.includes('/camera')) {
+    hdImageUrl = specs.imageUrl;
+  }
 
   debug.review_url = specs.review_url || null;
 
