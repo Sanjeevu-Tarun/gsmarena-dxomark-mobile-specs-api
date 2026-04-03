@@ -346,9 +346,8 @@ If this project helped you, consider giving it a star — it helps others discov
 
 - 🐛 [Report a bug](https://github.com/Sanjeevu-Tarun/mobile-specs-api/issues)
 - 💡 [Request a feature](https://github.com/Sanjeevu-Tarun/mobile-specs-api/issues)
-- 👤 [Follow me on GitHub](https://github.com/Sanjeevu-Tarun) for more projects like this
-- ❤️ Thanks for your support
-
+- 👤 [Follow me on GitHub](https://github.com/Sanjeevu-Tarun) for more projects like this ❤️!
+- ❤️ Thanks for your support 
 ---
 
 ## 📄 License
