@@ -317,7 +317,42 @@ export async function getPhoneDetails(slug: string): Promise<IPhoneDetails> {
         const picHtml = await getHtml(picturesPageUrl);
         const $pic = cheerio.load(picHtml);
 
-        // ── Pass 1: collect ALL /vv/pics/ full-res press renders ───────────
+        // ── Pass 0: extract full gallery from inline JS arrays ─────────────
+        // GSMArena renders the pictures gallery via JavaScript, not static img tags.
+        // The page embeds arrays like:
+        //   var imgroot="//fdn2.gsmarena.com/vv/bigpic/";
+        //   var pics=["samsung_galaxy_s25-001.jpg","samsung_galaxy_s25-002.jpg",...];
+        // Cheerio can't execute JS, so we must extract these from the raw script text.
+        const scriptBlob = $pic('script').map((_, el) => $pic(el).html() || '').get().join('\n');
+
+        // Extract the imgroot base URL (normalise protocol-relative // → https://)
+        const imgrootMatch = scriptBlob.match(/var\s+imgroot\s*=\s*["']([^"']+)["']/);
+        const rawImgroot = imgrootMatch?.[1] || '';
+        const imgroot = rawImgroot.startsWith('//')
+          ? `https:${rawImgroot}`
+          : rawImgroot;
+
+        // Extract the pics array — filenames relative to imgroot
+        const picsArrayMatch = scriptBlob.match(/var\s+pics\s*=\s*\[([^\]]+)\]/);
+        if (picsArrayMatch && imgroot) {
+          const filenames = Array.from(picsArrayMatch[1].matchAll(/"([^"]+\.jpe?g)"/gi))
+            .map(m => m[1]);
+          for (const filename of filenames) {
+            const fullUrl = `${imgroot}${filename}`;
+            if (!officialImages.includes(fullUrl)) officialImages.push(fullUrl);
+          }
+        }
+
+        // Fallback: pics stored as full URLs directly in the array
+        if (officialImages.length === 0 && picsArrayMatch) {
+          const urls = Array.from(picsArrayMatch[1].matchAll(/"(https?:[^"]+\.jpe?g)"/gi))
+            .map(m => m[1]);
+          for (const url of urls) {
+            if (!officialImages.includes(url)) officialImages.push(url);
+          }
+        }
+
+        // ── Pass 1: also scan <img> tags for any /vv/pics/ images not in JS ─
         $pic('img').each((_, el) => {
           const src = $pic(el).attr('src') || $pic(el).attr('data-src') || '';
           if (src.includes('/vv/pics/') && src.includes('gsmarena.com') && src.match(/\.jpe?g$/i)) {
@@ -341,8 +376,8 @@ export async function getPhoneDetails(slug: string): Promise<IPhoneDetails> {
 
         // ── Fallback: infer color names from inline JS color array ─────────
         // GSMArena embeds: var colors = ["Titanium Black","Titanium Gray",...];
+        // scriptBlob already built above in Pass 0 — reuse it here.
         if (colorVariants.length === 0 && officialImages.length > 0) {
-          const scriptBlob = $pic('script').map((_, el) => $pic(el).html() || '').get().join('\n');
           const colorsMatch = scriptBlob.match(/(?:var\s+colors|"colors")\s*[=:]\s*\[([^\]]+)\]/);
           if (colorsMatch) {
             const names = Array.from(colorsMatch[1].matchAll(/"([^"]+)"/g)).map(m => m[1]);
