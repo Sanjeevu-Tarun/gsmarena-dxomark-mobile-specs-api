@@ -556,7 +556,7 @@ export async function getPhoneDetails(slug: string): Promise<IPhoneDetails> {
     });
     console.log(`[getPhoneDetails] specificTokens for ${slug}:`, matchTokens, '→ siblings:', siblingDeviceSlugs);
 
-    // Build picturesPageData bundles
+    // Build picturesPageData bundle
     const picturesPageData: IPicturesPageData | undefined = picturesPageUrl ? {
       officialImages,
       colorVariants,
