@@ -1,102 +1,73 @@
 /**
- * cache.ts — shared Redis + in-memory cache
+ * cache.ts — shared Redis + in-memory cache for mobile-specs-enhanced
  *
- * Layer 1 : In-process LRU map  (bounded to MEM_CACHE_MAX entries, NO TTL — infinite)
- * Layer 2 : Upstash Redis REST  (no EX — persist indefinitely)
- *
- * Cache invalidation is handled by bumping the version in the cache key
- * (e.g. gsm:phone-full:v2 → v3) whenever scraping logic changes.
- * Old versioned keys are simply never read again.
- *
- * Env vars required for Redis:
- *   UPSTASH_REDIS_REST_URL
- *   UPSTASH_REDIS_REST_TOKEN
- * Falls back silently to mem-only if they are missing.
+ * Pattern: mem-first → Redis fallback (same as notebookchecker project).
+ * Uses UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN env vars.
+ * Falls back silently to mem-only if env vars are missing.
  */
 
 import axios from 'axios';
-import https from 'https';
 
-const MEM_CACHE_MAX = 500; // max entries kept in process memory
+const CACHE_TTL_MS  = 30 * 24 * 60 * 60 * 1000; // 30 days (mem TTL check)
+const MEM_CACHE_MAX = 300;
 
 // ── In-process LRU map ────────────────────────────────────────────────────────
-// NO TTL — entries live until evicted by capacity.
-const _mem = new Map<string, { data: unknown }>();
+const _mem = new Map<string, { data: unknown; time: number }>();
 
-function _memEvict(): void {
+function _memEvict() {
   if (_mem.size < MEM_CACHE_MAX) return;
-  // Evict oldest 20% (Map preserves insertion order → first entries are oldest).
-  const evict = Math.ceil(MEM_CACHE_MAX * 0.2);
-  const keys = _mem.keys();
-  for (let i = 0; i < evict; i++) {
-    const next = keys.next();
-    if (next.done) break;
-    _mem.delete(next.value);
-  }
+  const evict = Math.floor(MEM_CACHE_MAX * 0.2);
+  const keys = [..._mem.keys()];
+  for (let i = 0; i < evict; i++) _mem.delete(keys[i]);
 }
 
 function _memGet(k: string): unknown | null {
   const h = _mem.get(k);
   if (!h) return null;
-  // LRU touch: delete then re-insert so it moves to the tail (most recently used).
-  _mem.delete(k);
-  _mem.set(k, h);
+  if (Date.now() - h.time >= CACHE_TTL_MS) { _mem.delete(k); return null; }
+  _mem.delete(k); _mem.set(k, h); // move to end (LRU)
   return h.data;
 }
 
-function _memSet(k: string, d: unknown): void {
+function _memSet(k: string, d: unknown) {
   _memEvict();
-  // Delete first so re-inserted key lands at the tail.
-  _mem.delete(k);
-  _mem.set(k, { data: d });
+  _mem.set(k, { data: d, time: Date.now() });
 }
 
-// ── Shared axios instance for Upstash REST calls ──────────────────────────────
+// ── Shared axios for Upstash REST calls ───────────────────────────────────────
 const _redisAxios = axios.create({
-  httpsAgent: new https.Agent({ keepAlive: true, maxSockets: 20 }),
+  httpsAgent: new (require('https').Agent)({ keepAlive: true, maxSockets: 20 }),
 });
 
-function _redisCredentials(): { url: string; token: string } | null {
+async function _redisGet(k: string): Promise<unknown | null> {
   const url   = process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
   if (!url || !token) return null;
-  return { url, token };
-}
-
-async function _redisGet(k: string): Promise<unknown | null> {
-  const creds = _redisCredentials();
-  if (!creds) return null;
   try {
-    const resp = await _redisAxios.get(
-      `${creds.url}/get/${encodeURIComponent(k)}`,
-      { headers: { Authorization: `Bearer ${creds.token}` }, timeout: 10_000 },
-    );
+    const resp = await _redisAxios.get(`${url}/get/${encodeURIComponent(k)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      timeout: 10000,
+    });
     const val = resp.data?.result;
-    return val != null ? JSON.parse(val) : null;
-  } catch {
-    return null;
-  }
+    return val ? JSON.parse(val) : null;
+  } catch { return null; }
 }
 
 async function _redisSet(k: string, d: unknown): Promise<void> {
-  const creds = _redisCredentials();
-  if (!creds) return;
+  const url   = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) return;
   try {
-    // No EX flag — persist indefinitely.
+    // No EX — persist indefinitely.
+    // Invalidation is handled by bumping the cache key version in index.ts
+    // (gsm:phone-full:v1 → v2 → v3 …) whenever the scraper logic changes.
+    // Old versioned keys are simply never read again.
     await _redisAxios.post(
-      `${creds.url}/pipeline`,
+      `${url}/pipeline`,
       [['SET', k, JSON.stringify(d)]],
-      {
-        headers: {
-          Authorization: `Bearer ${creds.token}`,
-          'Content-Type': 'application/json',
-        },
-        timeout: 25_000,
-      },
+      { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, timeout: 25000 },
     );
-  } catch {
-    /* non-fatal — Redis write failures must never crash the request */
-  }
+  } catch { /* non-fatal */ }
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -112,22 +83,18 @@ export interface CacheResult<T> {
 export async function cacheGetWithSource<T>(k: string): Promise<CacheResult<T>> {
   const mem = _memGet(k);
   if (mem !== null) return { data: mem as T, source: 'mem' };
-
   const red = await _redisGet(k);
-  if (red !== null) {
-    _memSet(k, red);
-    return { data: red as T, source: 'redis' };
-  }
-
+  if (red !== null) { _memSet(k, red); return { data: red as T, source: 'redis' }; }
   return { data: null, source: 'miss' };
 }
 
-/** Read: mem → Redis → null (convenience wrapper) */
+/** Read: mem → Redis → null (backwards-compatible) */
 export async function cacheGet<T>(k: string): Promise<T | null> {
-  return (await cacheGetWithSource<T>(k)).data;
+  const r = await cacheGetWithSource<T>(k);
+  return r.data;
 }
 
-/** Write: mem (sync) + Redis (fire-and-forget, non-fatal) */
+/** Write: mem (sync) + Redis (fire-and-forget) */
 export function cacheSet(k: string, d: unknown): void {
   _memSet(k, d);
   _redisSet(k, d).catch(() => { /* non-fatal */ });

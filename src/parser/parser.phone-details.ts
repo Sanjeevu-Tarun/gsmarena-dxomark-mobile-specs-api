@@ -1,6 +1,11 @@
 import { IPhoneDetails, IDeviceImage, IColorVariant, IPicturesPageData, TSpecCategory } from "../types";
 import * as cheerio from 'cheerio';
+<<<<<<< HEAD
 import { baseUrl } from "../config";
+=======
+import { baseUrl } from "../server";
+import { TSpecCategory } from "../types";
+>>>>>>> parent of e29b6b7 (fixed)
 import { getHtml } from "./parser.service";
 import { cacheGet, cacheSet } from "../cache";
 
