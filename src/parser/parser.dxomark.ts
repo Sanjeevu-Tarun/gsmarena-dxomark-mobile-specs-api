@@ -1150,7 +1150,7 @@ export async function scrapeDxoPage(pageUrl: string, nocache = false): Promise<I
     return { ...FAILED, _fetchError: fetchError } as any;
   }
 
-  // Extract brand/model from URL for fallbacks
+  // Extract brand/model from URL for fallbacks!
   // URL shape: /smartphones/Samsung/Galaxy-S25-Ultra
   const urlMatch = pageUrl.match(/\/smartphones\/([^/]+)\/([^/?]+)/);
   const brand = urlMatch ? decodeURIComponent(urlMatch[1]) : '';
