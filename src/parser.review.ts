@@ -27,7 +27,7 @@
  */
 
 import * as cheerio from 'cheerio';
-import { baseUrl } from '../server';
+import { baseUrl } from '../config';
 import { getHtml } from './parser.service';
 import {
   IReviewResult,

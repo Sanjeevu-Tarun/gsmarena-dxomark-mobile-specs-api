@@ -19,10 +19,6 @@ export interface IPhoneDetails {
     storage: string;
     specifications: Record<string, TSpecCategory>;
     review_url?: string;
-    /** Slugs of sibling/variant devices (e.g. 5G edition, other storage tiers) */
-    siblingDeviceSlugs: string[];
-    /** Full data scraped from the GSMArena pictures page */
-    picturesPageData?: IPicturesPageData;
 }
   
 export interface IBrandDetails {
@@ -36,7 +32,6 @@ export interface IPhoneListItem {
     name: string;
     slug: string;
     imageUrl?: string;
-    thumbUrl?: string;
     detail_url: string;
     rank?: number;
     hits?: number;
@@ -83,7 +78,7 @@ export interface IReviewDetails {
 export interface ILensDetail {
     /** e.g. "Wide (main)", "Telephoto 3.5x", "Ultrawide", "Front camera" */
     role: string;
-    /** Full detail text e.g. "50MP Sony Lytia LYT-828 (1/1.28\"), f/1.57, 24mm, OIS; 4K@120" */
+    /** Full detail text e.g. "50MP Sony Lytia LYT-828 (1/1.28"), f/1.57, 24mm, OIS; 4K@120" */
     detail: string;
     /** First inline-image found in the same camera section, used as representative thumbnail */
     sectionImageUrl?: string;

@@ -17,7 +17,6 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { cacheGet, cacheSet } from '../cache';
-import { getHtml } from './parser.service';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -121,56 +120,9 @@ const JSON_HEADERS = {
   'Referer': DXO_BASE + '/',
 };
 
-/**
- * Fetch a DXOMark page with UA rotation + exponential-backoff retry
- * (inherited from getHtml in parser.service) plus DXOMark-specific headers.
- * We override User-Agent via the shared pool and add Origin/Referer here.
- */
 async function getDxoHtml(url: string): Promise<string> {
-  // getHtml already handles UA rotation, keep-alive, and retry.
-  // DXOMark needs Origin + Referer to avoid Cloudflare challenges.
-  // We append those by temporarily overriding via a wrapper call.
-  // Since getHtml sets its own headers internally, we fetch directly
-  // using axios with the same retry semantics for DXO-specific headers.
-  const { default: https } = await import('https');
-  const instance = axios.create({
-    httpsAgent: new https.Agent({ keepAlive: true, maxSockets: 10 }),
-    timeout: 15_000,
-    maxRedirects: 5,
-  });
-
-  const RETRYABLE = new Set([429, 500, 502, 503, 504]);
-  const USER_AGENTS = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15',
-  ];
-  let _ua = 0;
-  const pickUA = () => USER_AGENTS[(_ua++) % USER_AGENTS.length];
-
-  let lastErr: unknown;
-  for (let attempt = 0; attempt <= 3; attempt++) {
-    try {
-      const { data, status } = await instance.get<string>(url, {
-        headers: {
-          ...HEADERS,
-          'User-Agent': pickUA(),
-          'Origin': DXO_BASE,
-          'Referer': DXO_BASE + '/',
-        },
-        validateStatus: (s) => s < 600,
-      });
-      if (RETRYABLE.has(status)) throw Object.assign(new Error(`HTTP ${status}`), { status });
-      return typeof data === 'string' ? data : JSON.stringify(data);
-    } catch (err: any) {
-      lastErr = err;
-      const retryable = RETRYABLE.has(err?.status) || ['ECONNRESET','ETIMEDOUT','ECONNABORTED'].includes(err?.code ?? '');
-      if (!retryable || attempt === 3) break;
-      await new Promise(r => setTimeout(r, 600 * Math.pow(2, attempt)));
-    }
-  }
-  throw lastErr;
+  const { data } = await axios.get(url, { headers: HEADERS, timeout: 15000, maxRedirects: 5 });
+  return typeof data === 'string' ? data : JSON.stringify(data);
 }
 
 function safeInt(val: any): number | null {

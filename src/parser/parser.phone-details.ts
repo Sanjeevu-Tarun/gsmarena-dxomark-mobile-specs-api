@@ -1,13 +1,8 @@
-import { IPhoneDetails, IDeviceImage, IColorVariant, IPicturesPageData, TSpecCategory } from "../types";
+import { IPhoneDetails, IDeviceImage, IColorVariant, IPicturesPageData } from "../types";
 import * as cheerio from 'cheerio';
-<<<<<<< HEAD
 import { baseUrl } from "../config";
-=======
-import { baseUrl } from "../server";
 import { TSpecCategory } from "../types";
->>>>>>> parent of e29b6b7 (fixed)
 import { getHtml } from "./parser.service";
-import { cacheGet, cacheSet } from "../cache";
 
 /**
  * FIXED: parser.phone-details.ts
@@ -134,10 +129,6 @@ function isLinkRelatedToDevice(
 }
 
 export async function getPhoneDetails(slug: string): Promise<IPhoneDetails> {
-    const ck = `gsm:phone-full:v1:${slug}`;
-    const cached = await cacheGet<IPhoneDetails>(ck);
-    if (cached) return cached;
-
     const html = await getHtml(`${baseUrl}/${slug}.php`);
     const $ = cheerio.load(html);
 
@@ -223,6 +214,8 @@ export async function getPhoneDetails(slug: string): Promise<IPhoneDetails> {
       candidates.push({ href: fullUrl, score, isRelated });
     });
     
+    console.log(`[getPhoneDetails] Found ${candidates.length} link candidates for ${slug}`);
+    console.log(`[getPhoneDetails] Candidates:`, candidates.slice(0, 5).map(c => ({ href: c.href, score: c.score, isRelated: c.isRelated })));
 
     // Sort by: related first, then by score
     candidates.sort((a, b) => {
@@ -233,15 +226,19 @@ export async function getPhoneDetails(slug: string): Promise<IPhoneDetails> {
     // Take the best match
     if (candidates.length > 0 && candidates[0].isRelated) {
       review_url = candidates[0].href;
+      console.log(`[getPhoneDetails] Selected review_url (related): ${review_url}`);
     } else if (candidates.length > 0) {
       // Fallback: if no "related" match, take highest scoring link anyway
       // (some phones might have unusual naming)
       const bestUnrelated = candidates[0];
       if (bestUnrelated.score >= 70) { // Only if it's review or camera_samples
         review_url = bestUnrelated.href;
+        console.log(`[getPhoneDetails] Selected review_url (unrelated, high score): ${review_url}`);
       } else {
+        console.log(`[getPhoneDetails] No review_url: best unrelated score was ${bestUnrelated.score} (need 70+)`);
       }
     } else {
+      console.log(`[getPhoneDetails] No review_url: no candidates found`);
     }
 
     // Additional fallback: search in page text for links
@@ -326,6 +323,7 @@ export async function getPhoneDetails(slug: string): Promise<IPhoneDetails> {
         const imageScriptLines = scriptBlob.split('\n').filter(l =>
           /imgroot|bigpic|pics\s*=|photos\s*=|images\s*=|fdn2|vv\/|\.jpg/i.test(l)
         ).slice(0, 30);
+        console.log(`[pictures-page] ${slug} — image-related script lines:`, imageScriptLines);
 
         // Log a sample of all <li> elements with data- attrs to find color variant pattern
         const liAttrs: string[] = [];
@@ -336,6 +334,7 @@ export async function getPhoneDetails(slug: string): Promise<IPhoneDetails> {
             .join(' ');
           if (attrs) liAttrs.push(`<li ${attrs}>`);
         });
+        console.log(`[pictures-page] ${slug} — li attrs sample (first 10):`, liAttrs.slice(0, 10));
 
         // ── Pass 0A: extract full gallery from inline JS — multiple patterns ──
         // GSMArena uses various variable names across different page versions.
@@ -410,6 +409,7 @@ export async function getPhoneDetails(slug: string): Promise<IPhoneDetails> {
         });
         // First official image is the hero
         if (officialImages.length > 0) hdImageUrl = officialImages[0];
+        console.log(`[pictures-page] ${slug} — officialImages count after all passes: ${officialImages.length}`);
 
         // ── Pass 2: color variants from the 3D model section ───────────────────
         // Try all known attribute/selector patterns GSMArena has used
@@ -445,6 +445,7 @@ export async function getPhoneDetails(slug: string): Promise<IPhoneDetails> {
             colorVariants.push({ colorName, imageUrl: rawUrl, isDefault: idx === 0 });
           }
         });
+        console.log(`[pictures-page] ${slug} — colorVariants count: ${colorVariants.length}`);
 
         // ── Fallback: infer color names from inline JS color/colors array ──────
         // scriptBlob already built above — reuse it here.
@@ -553,6 +554,7 @@ export async function getPhoneDetails(slug: string): Promise<IPhoneDetails> {
         siblingDeviceSlugs.push(href);
       }
     });
+    console.log(`[getPhoneDetails] specificTokens for ${slug}:`, matchTokens, '→ siblings:', siblingDeviceSlugs);
 
     // Build picturesPageData bundle
     const picturesPageData: IPicturesPageData | undefined = picturesPageUrl ? {
@@ -561,21 +563,18 @@ export async function getPhoneDetails(slug: string): Promise<IPhoneDetails> {
       picturesPageUrl,
     } : undefined;
 
-    const result: IPhoneDetails = {
-      brand,
-      model,
+    return { 
+      brand, 
+      model, 
       imageUrl: hdImageUrl || imageUrl,  // HD press photo if available, else bigpic
       device_images,
       review_url,
       siblingDeviceSlugs,
-      release_date,
-      dimensions,
-      os,
-      storage,
+      release_date, 
+      dimensions, 
+      os, 
+      storage, 
       specifications,
       picturesPageData,
     };
-
-    cacheSet(ck, result);
-    return result;
   }
