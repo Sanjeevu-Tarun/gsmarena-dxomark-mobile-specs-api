@@ -10,6 +10,30 @@ import type { IncomingMessage, ServerResponse } from 'http';
 const app = Fastify({ logger: false });
 const parserService = new ParserService();
 
+// ── CORS ─────────────────────────────────────────────────────────────────────
+app.addHook('onSend', async (_request, reply) => {
+  reply.header('Access-Control-Allow-Origin', '*');
+  reply.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  reply.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+});
+app.options('/*', async (_request, reply) => {
+  reply.header('Access-Control-Allow-Origin', '*');
+  reply.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  reply.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  reply.status(204).send();
+});
+
+// ── Debug route guard ──────────────────────────────────────────────────────
+// Protect destructive debug routes with a shared secret.
+// Set DEBUG_SECRET env var; pass ?secret=<value> on each request.
+function requireDebugSecret(request: any, reply: any): boolean {
+  const secret = process.env.DEBUG_SECRET;
+  if (!secret) return true; // No secret configured → open (dev mode)
+  if ((request.query as any)?.secret === secret) return true;
+  reply.status(403).send({ status: false, error: 'Forbidden: missing or invalid secret' });
+  return false;
+}
+
 // Landing page — HTML inlined to avoid Vercel serverless filesystem issues
 const LANDING_HTML = `<!DOCTYPE html>
 <html lang="en">
@@ -607,7 +631,7 @@ const LANDING_HTML = `<!DOCTYPE html>
 
   <footer>
     <span><span class="status-dot"></span>GSMArena + DXOMark Scraper &middot; Vercel Serverless</span>
-    <span>13 endpoints</span>
+    <span>20+ endpoints</span>
   </footer>
 </div>
 
@@ -642,7 +666,8 @@ app.get('/debug', async (request) => {
 });
 
 // Flush stale search cache keys (gsm:search:* and gsm:phone-full:*)
-app.get('/debug/flush-search', async (_request, reply) => {
+app.get('/debug/flush-search', async (_request: any, reply: any) => {
+  if (!requireDebugSecret(_request, reply)) return;
   const url   = process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
   if (!url || !token) return reply.status(500).send({ ok: false, error: 'Env vars missing' });
@@ -671,7 +696,8 @@ app.get('/debug/flush-search', async (_request, reply) => {
 });
 
 // Flush all gsm:html:* keys from Redis (one-time cleanup)
-app.get('/debug/flush-html', async (_request, reply) => {
+app.get('/debug/flush-html', async (_request: any, reply: any) => {
+  if (!requireDebugSecret(_request, reply)) return;
   const url   = process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
   if (!url || !token) return reply.status(500).send({ ok: false, error: 'Env vars missing' });
@@ -822,10 +848,10 @@ app.get('/top-by-fans', async () => {
 app.get('/search', async (request, reply) => {
   const query = (request.query as any).query;
   if (!query) {
-    return reply.status(400).send({ error: 'Query parameter is required' });
+    return reply.status(400).send({ status: false, error: 'Query parameter is required' });
   }
   const data = await parserService.search(query);
-  return data;
+  return { status: true, count: data.length, data };
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -940,6 +966,7 @@ app.get('/review/:reviewSlug/images', async (request, reply) => {
 
 // Temporary debug endpoint for iQOO Z7 Pro camera samples investigation
 app.get('/debug-camera', async (request: any, reply: any) => {
+  if (!requireDebugSecret(request, reply)) return;
   const { getHtml } = await import('../src/parser/parser.service');
   const { load } = await import('cheerio');
   const results: any = {};
@@ -1209,10 +1236,10 @@ app.get('/phone', async (request, reply) => {
   const fullCached = nocache ? { data: null, source: 'miss' as const } : await cacheGetWithSource<any>(fullCk);
 
   // Debug header so you can see exactly what key was checked
-  console.log(`[/phone] raw="${name}" norm="${normName}" ck="${fullCk}" cache=${fullCached.source}`);
 
   if (fullCached.data) {
     const cached = fullCached.data;
+    reply.header('X-Cache', fullCached.source);
     return {
       status: cached.status,
       matched: cached.matched,
@@ -1570,9 +1597,7 @@ app.get('/phone', async (request, reply) => {
   const shouldPersist = cameraSamples.length > 0 || !specs.review_url;
   if (shouldPersist) {
     cacheSet(fullCk, { status: result.status, matched: result.matched, data: result.data });
-    console.log(`[/phone] cached "${normName}" → ${fullCk} (cameraFound=${result._cameraFound})`);
   } else {
-    console.log(`[/phone] SKIP Redis cache "${normName}" — review_url present but cameraSamples=[] (transient, will retry)`);
   }
 
   return result;
@@ -1943,10 +1968,14 @@ app.get('/dxomark/url', async (request, reply) => {
 });
 
 // ── /:slug must be LAST –it's a catch-all for device specs ──────────────────
-app.get('/:slug', async (request) => {
+app.get('/:slug', async (request, reply) => {
   const slug = (request.params as any).slug;
-  const data = await getPhoneDetails(slug);
-  return data;
+  try {
+    const data = await getPhoneDetails(slug);
+    return { status: true, data };
+  } catch (err: any) {
+    return reply.status(500).send({ status: false, error: err?.message || String(err) });
+  }
 });
 
 let ready = false;
@@ -1968,15 +1997,12 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   }
 
   const url = req.url || '/';
-  console.log('[handler] method:', req.method, 'url:', url);
 
   const response = await app.inject({
     method: (req.method || 'GET') as any,
     url,
     headers: req.headers as any,
   });
-
-  console.log('[handler] fastify response status:', response.statusCode, 'body:', response.body.slice(0, 200));
 
   res.writeHead(response.statusCode, response.headers as any);
   res.end(response.body);
