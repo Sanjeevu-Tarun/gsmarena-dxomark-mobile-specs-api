@@ -13,7 +13,7 @@
 [![Fastify](https://img.shields.io/badge/Fastify-5.7-000000?logo=fastify)](https://fastify.dev/)
 [![pnpm](https://img.shields.io/badge/pnpm-9.15-F69220?logo=pnpm&logoColor=white)](https://pnpm.io/)
 [![Vercel](https://img.shields.io/badge/Deploy%20on-Vercel-black?logo=vercel)](https://vercel.com/)
-[![CI](https://img.shields.io/github/actions/workflow/status/Sanjeevu-Tarun/gsmarena-dxomark-mobile-specs-api/ci.yml?label=CI&logo=github)](../../actions)
+
 
 <br/>
 
