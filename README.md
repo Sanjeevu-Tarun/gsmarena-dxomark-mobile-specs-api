@@ -1,6 +1,5 @@
 <div align="center">
 
-<!-- HERO BANNER — replace with your actual banner (recommended: 1280×320px, dark background) -->
 ![GSMArena + DXOMark Mobile Specs API](https://placehold.co/1280x320/0d1117/58a6ff?text=GSMArena+%2B+DXOMark+Mobile+Specs+API&font=roboto)
 
 # 📡 GSMArena + DXOMark Mobile Specs API
@@ -44,7 +43,7 @@
   - [`/review/:reviewSlug/camera-samples`](#reviewreviewslugcamera-samples--camera-samples-only)
   - [`/review/:reviewSlug/images`](#reviewreviewslugimages--in-article-images)
   - [DXOMark Endpoints](#dxomark-endpoints)
-  - [Cache Behaviour](#cache-behaviour)
+  - [Cache Behavior](#cache-behavior)
   - [Error Responses](#error-responses)
 - [Sample JSON Output](#sample-json-output)
 - [Architecture](#architecture)
@@ -95,6 +94,9 @@ It also surfaces **official press renders per color variant**, **in-article revi
 | Latest phones & top-by-interest/fans lists | ✅ | ❌ |
 | Serverless-ready — zero infrastructure | ✅ | ❌ |
 
+
+> **Note:** No public API instance is provided — self-hosting is required to prevent abuse. Follow the [Quick Start](#quick-start) guide to spin up your own instance locally or deploy to Vercel in one click.
+
 <div align="right"><a href="#table-of-contents">↑ back to top</a></div>
 
 ---
@@ -130,7 +132,7 @@ vercel deploy
 pnpm test
 ```
 
-The test suite covers route handlers, cache layer behaviour (`mem` / `redis` / `miss`), search penalty scoring, and DXOMark score parsing. All tests run against a local mock server — no live scraping occurs during CI.
+The test suite covers route handlers, cache layer behavior (`mem` / `redis` / `miss`), search penalty scoring, and DXOMark score parsing. All tests run against a local mock server — no live scraping occurs during CI.
 
 <div align="right"><a href="#table-of-contents">↑ back to top</a></div>
 
@@ -177,6 +179,9 @@ A quick reference before diving into individual endpoints.
 | `GET` | `/dxomark/search?query=` | Search DXOMark directly |
 | `GET` | `/dxomark/url?name=` | Resolve DXOMark URL for a device name |
 
+
+> **Parameter design:** `name=` is used for exact or near-exact device matching (e.g. `/phone`, `/dxomark`) and applies strict penalty scoring to surface the single best result. `query=` is used for open-ended fuzzy searching (e.g. `/search`, `/dxomark/search`) and returns a ranked list of candidates.
+
 All endpoints that accept a `name` or `query` parameter also accept `&nocache=1` to bypass both cache layers and force a fresh scrape.
 
 ---
@@ -193,8 +198,8 @@ The primary endpoint. Returns specs + camera samples + press renders + DXOMark s
 | `nocache` | No | Set to `1` to skip both cache layers and force a live scrape |
 
 ```bash
-GET /phone?name=samsung+galaxy+s25+ultra
-GET /phone?name=pixel+9+pro&nocache=1
+GET http://localhost:4000/phone?name=samsung+galaxy+s25+ultra
+GET http://localhost:4000/phone?name=pixel+9+pro&nocache=1
 ```
 
 **Response shape:**
@@ -240,7 +245,7 @@ GET /phone?name=pixel+9+pro&nocache=1
 | `query` | Yes | Search term (URL-encoded) |
 
 ```bash
-GET /search?query=pixel+9+pro
+GET http://localhost:4000/search?query=pixel+9+pro
 ```
 
 Uses penalty scoring so `pixel 9` doesn't bleed into `pixel 9 pro` results. Returns name, slug, image URLs, and detail URL.
@@ -250,7 +255,7 @@ Uses penalty scoring so `pixel 9` doesn't bleed into `pixel 9 pro` results. Retu
 ### `/:slug` — Specs by GSMArena slug
 
 ```bash
-GET /samsung_galaxy_s25_ultra-12311
+GET http://localhost:4000/samsung_galaxy_s25_ultra-12311
 ```
 
 Returns raw GSMArena specifications + color images + review URL for a known slug. Obtain the slug from `/search`.
@@ -260,7 +265,7 @@ Returns raw GSMArena specifications + color images + review URL for a known slug
 ### `/brands` — All brands
 
 ```bash
-GET /brands
+GET http://localhost:4000/brands
 ```
 
 Returns all brands with their slugs, brand IDs, device counts, and detail URLs.
@@ -270,8 +275,8 @@ Returns all brands with their slugs, brand IDs, device counts, and detail URLs.
 ### `/brands/:brandSlug` — Phones by brand
 
 ```bash
-GET /brands/samsung-phones-9
-GET /brands/apple
+GET http://localhost:4000/brands/samsung-phones-9
+GET http://localhost:4000/brands/apple
 ```
 
 Returns all phones for a brand. Accepts either a full brand slug (`samsung-phones-9`) or just the brand name (`apple`).
@@ -281,7 +286,7 @@ Returns all phones for a brand. Accepts either a full brand slug (`samsung-phone
 ### `/latest` — Latest phones
 
 ```bash
-GET /latest
+GET http://localhost:4000/latest
 ```
 
 Returns GSMArena's list of recently released devices.
@@ -291,8 +296,8 @@ Returns GSMArena's list of recently released devices.
 ### `/top-by-interest` · `/top-by-fans` — Trending devices
 
 ```bash
-GET /top-by-interest
-GET /top-by-fans
+GET http://localhost:4000/top-by-interest
+GET http://localhost:4000/top-by-fans
 ```
 
 Returns GSMArena's current popularity rankings.
@@ -302,7 +307,7 @@ Returns GSMArena's current popularity rankings.
 ### `/review/:reviewSlug` — Full review
 
 ```bash
-GET /review/samsung_galaxy_s25_ultra-review-2631
+GET http://localhost:4000/review/samsung_galaxy_s25_ultra-review-2631
 ```
 
 Returns hero images, all in-article images grouped by section heading, camera sample tabs, and parsed lens details.
@@ -312,7 +317,7 @@ Returns hero images, all in-article images grouped by section heading, camera sa
 ### `/review/:reviewSlug/camera-samples` — Camera samples only
 
 ```bash
-GET /review/samsung_galaxy_s25_ultra-review-2631/camera-samples
+GET http://localhost:4000/review/samsung_galaxy_s25_ultra-review-2631/camera-samples
 ```
 
 Returns only the camera sample tabs, pre-sorted into: `Main Camera`, `Night / Low Light`, `Zoom`, `Selfie`, `Ultra-Wide`, `Portrait`, `Macro`, `Video`, `Indoor`.
@@ -322,7 +327,7 @@ Returns only the camera sample tabs, pre-sorted into: `Main Camera`, `Night / Lo
 ### `/review/:reviewSlug/images` — In-article images
 
 ```bash
-GET /review/samsung_galaxy_s25_ultra-review-2631/images
+GET http://localhost:4000/review/samsung_galaxy_s25_ultra-review-2631/images
 ```
 
 Returns all images embedded in the review article, grouped by their nearest heading.
@@ -341,8 +346,8 @@ Returns all images embedded in the review article, grouped by their nearest head
 | `nocache` | No | Set to `1` to bypass cache |
 
 ```bash
-GET /dxomark?name=samsung+galaxy+s25+ultra
-GET /dxomark?name=pixel+9+pro&nocache=1
+GET http://localhost:4000/dxomark?name=samsung+galaxy+s25+ultra
+GET http://localhost:4000/dxomark?name=pixel+9+pro&nocache=1
 ```
 
 Returns overall score, all sub-scores, pros/cons, ranking, strengths, weaknesses, and categorized camera samples in one response.
@@ -350,7 +355,7 @@ Returns overall score, all sub-scores, pros/cons, ranking, strengths, weaknesses
 #### `/dxomark/review` — Full review with `BEST` values
 
 ```bash
-GET /dxomark/review?name=samsung+galaxy+s25+ultra
+GET http://localhost:4000/dxomark/review?name=samsung+galaxy+s25+ultra
 ```
 
 Richer than `/dxomark` — includes all sub-scores with their `BEST` reference value, full methodology breakdown, and sample images.
@@ -358,8 +363,8 @@ Richer than `/dxomark` — includes all sub-scores with their `BEST` reference v
 #### `/dxomark/review/samples` — DXOMark samples only
 
 ```bash
-GET /dxomark/review/samples?name=samsung+galaxy+s25+ultra
-GET /dxomark/review/samples?url=https://www.dxomark.com/samsung-galaxy-s25-ultra-camera-test/
+GET http://localhost:4000/dxomark/review/samples?name=samsung+galaxy+s25+ultra
+GET http://localhost:4000/dxomark/review/samples?url=https://www.dxomark.com/samsung-galaxy-s25-ultra-camera-test/
 ```
 
 Returns only the `sampleImages` array from the camera review — the fastest way to get all DXOMark test photos grouped by category (Main, Ultra-Wide, Tele, etc.).
@@ -367,7 +372,7 @@ Returns only the `sampleImages` array from the camera review — the fastest way
 #### `/dxomark/review/url` — Scrape a specific DXOMark URL
 
 ```bash
-GET /dxomark/review/url?url=https://www.dxomark.com/samsung-galaxy-s25-ultra-camera-test/
+GET http://localhost:4000/dxomark/review/url?url=https://www.dxomark.com/samsung-galaxy-s25-ultra-camera-test/
 ```
 
 Scrapes a specific DXOMark camera review page directly. Returns all sub-scores, sample images, and sample count.
@@ -375,7 +380,7 @@ Scrapes a specific DXOMark camera review page directly. Returns all sub-scores, 
 #### `/dxomark/search` — Search DXOMark
 
 ```bash
-GET /dxomark/search?query=pixel+9+pro
+GET http://localhost:4000/dxomark/search?query=pixel+9+pro
 ```
 
 Searches DXOMark directly and returns matching device pages with their scores. Useful for discovery before hitting `/dxomark`.
@@ -383,14 +388,14 @@ Searches DXOMark directly and returns matching device pages with their scores. U
 #### `/dxomark/url` — Resolve DXOMark URL for a device
 
 ```bash
-GET /dxomark/url?name=samsung+galaxy+s25+ultra
+GET http://localhost:4000/dxomark/url?name=samsung+galaxy+s25+ultra
 ```
 
 Returns the resolved DXOMark camera review URL for a device name without fetching the full review.
 
 ---
 
-### Cache Behaviour
+### Cache Behavior
 
 Every response includes a `_cache` field that tells you exactly which layer served it:
 
@@ -557,7 +562,7 @@ graph TD
     JSON --> Redis
 ```
 
-See [Cache Behaviour](#cache-behaviour) for a full explanation of the dual-layer strategy and the transient cache-skip rule.
+See [Cache Behavior](#cache-behavior) for a full explanation of the dual-layer strategy and the transient cache-skip rule.
 
 <div align="right"><a href="#table-of-contents">↑ back to top</a></div>
 
@@ -577,7 +582,7 @@ See [Cache Behaviour](#cache-behaviour) for a full explanation of the dual-layer
     └── parser/
         ├── parser.service.ts        # search(), latest(), top-by-interest/fans
         ├── parser.brands.ts         # getBrands() with multi-selector fallback
-        ├── parser.phone-details.ts  # getPhoneDetails() — specs, colour images, press renders, 3D viewer URL
+        ├── parser.phone-details.ts  # getPhoneDetails() — specs, color images, press renders, 3D viewer URL
         ├── parser.review.ts         # getReviewDetails() — hero, article images, camera samples, lens details
         └── parser.dxomark.ts        # getDxoScores(), getDxoReview(), searchDxo(), scrapeDxoReview()
 ```
@@ -591,32 +596,32 @@ See [Cache Behaviour](#cache-behaviour) for a full explanation of the dual-layer
 **Mobile comparison platforms**
 Power side-by-side specs + DXOMark scores + camera samples in one call. No database to maintain.
 ```bash
-GET /phone?name=samsung+galaxy+s25+ultra
-GET /phone?name=google+pixel+9+pro
+GET http://localhost:4000/phone?name=samsung+galaxy+s25+ultra
+GET http://localhost:4000/phone?name=google+pixel+9+pro
 ```
 
 **Tech review sites**
 Embed live specs and camera benchmarks without scraping yourself.
 ```bash
-GET /review/samsung_galaxy_s25_ultra-review-2631/camera-samples
+GET http://localhost:4000/review/samsung_galaxy_s25_ultra-review-2631/camera-samples
 ```
 
 **AI assistants & LLM tools**
 Give your model clean, structured, up-to-date smartphone knowledge via tool-calling or RAG.
 ```bash
-GET /phone?name=iphone+16+pro+max   # structured JSON — ideal for LLM context
+GET http://localhost:4000/phone?name=iphone+16+pro+max   # structured JSON — ideal for LLM context
 ```
 
 **Research & data analysis**
 Correlate camera hardware specs against real-world DXOMark scores across device generations.
 ```bash
-GET /dxomark/review?name=oneplus+13
+GET http://localhost:4000/dxomark/review?name=oneplus+13
 ```
 
 **Android apps**
-Power a device detail screen with press renders per colour variant, a 3D viewer URL, and live specs.
+Power a device detail screen with press renders per color variant, a 3D viewer URL, and live specs.
 ```bash
-GET /phone?name=oneplus+13          # colorVariants[] + picturesPageUrl + specifications{}
+GET http://localhost:4000/phone?name=oneplus+13          # colorVariants[] + picturesPageUrl + specifications{}
 ```
 
 <div align="right"><a href="#table-of-contents">↑ back to top</a></div>
@@ -662,10 +667,12 @@ git push origin feature/your-feature
 # → open a pull request against main
 ```
 
-**Before pushing**, make sure tests pass:
+**Before pushing**, make sure all checks pass:
 
 ```bash
-pnpm test
+pnpm lint      # must pass with zero errors
+pnpm format    # auto-formats all source files
+pnpm test      # full test suite
 ```
 
 **Code style:** The project uses TypeScript strict mode. Keep parser modules isolated — each source (`gsmarena`, `dxomark`) has its own `parser.*.ts` file. Avoid adding cross-source dependencies inside parsers.
