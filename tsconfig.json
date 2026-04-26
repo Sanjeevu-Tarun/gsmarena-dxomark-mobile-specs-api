@@ -9,5 +9,5 @@
     "skipLibCheck": true
   },
   "include": ["src/**/*", "api/**/*"],
-  "exclude": ["src/server.ts", "dist/**/*", "node_modules/**/*"]
+  "exclude": ["dist/**/*", "node_modules/**/*"]
 }
