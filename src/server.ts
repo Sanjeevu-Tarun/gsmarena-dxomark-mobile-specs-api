@@ -1,8 +1,6 @@
 /**
- * server.ts — re-exports the Fastify handler for environments
- * that import from src/server rather than api/index directly.
- *
- * This keeps the import path consistent for any tooling or test
- * harness that references the server entry point by this path.
+ * server.ts — local dev entry point stub.
+ * The actual Vercel serverless handler lives in api/index.ts.
+ * This file is intentionally minimal to avoid Vercel entrypoint detection conflicts.
  */
-export { default } from '../api/index';
+export {};
