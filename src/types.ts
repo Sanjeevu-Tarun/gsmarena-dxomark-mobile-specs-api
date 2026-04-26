@@ -32,6 +32,7 @@ export interface IPhoneListItem {
     name: string;
     slug: string;
     imageUrl?: string;
+    thumbUrl?: string;
     detail_url: string;
     rank?: number;
     hits?: number;
