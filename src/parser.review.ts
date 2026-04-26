@@ -27,15 +27,15 @@
  */
 
 import * as cheerio from 'cheerio';
-import { baseUrl } from './config';
-import { getHtml } from './parser/parser.service';
+import { baseUrl } from '../config';
+import { getHtml } from './parser.service';
 import {
   IReviewResult,
   ICameraSampleCategory,
   ICameraSample,
   IReviewGallerySection,
   ILensDetail,
-} from './types';
+} from '../types';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -605,7 +605,7 @@ async function scrapeLensDetails(cameraPageUrl: string): Promise<ILensDetail[]> 
 
   // Strategy 1: explicit class selectors — collect from ALL matching <ul>s
   $('ul.article-blurb-findings, ul.article-blurb.article-blurb-findings').each((_, ul) => {
-    $(ul).find('li').each((_, li) => { allLiItems.push(li); });
+    $(ul).find('li').each((_, li) => allLiItems.push(li));
   });
 
   // Strategy 2: if nothing found, scan every <ul> whose first <li> starts with a role <b>
@@ -613,7 +613,7 @@ async function scrapeLensDetails(cameraPageUrl: string): Promise<ILensDetail[]> 
     $('ul').each((_, ul) => {
       const firstB = $(ul).find('li').first().find('b').first().text().trim();
       if (cameraRoleRx.test(firstB)) {
-        $(ul).find('li').each((_, li) => { allLiItems.push(li); });
+        $(ul).find('li').each((_, li) => allLiItems.push(li));
       }
     });
   }

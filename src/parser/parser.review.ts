@@ -206,6 +206,7 @@ async function findCameraPageNumber(baseReviewSlug: string, reviewId: string): P
   try {
     html = await getHtml(reviewUrl);
   } catch {
+    console.error(`[findCameraPageNumber] Failed to fetch ${reviewUrl}`);
     return null;
   }
 
@@ -213,6 +214,8 @@ async function findCameraPageNumber(baseReviewSlug: string, reviewId: string): P
 
   // Look for nav links pointing to pN pages and find the one labelled "camera"
   let cameraPage: number | null = null;
+  
+  console.log(`[findCameraPageNumber] Searching for camera page in ${baseReviewSlug}, reviewId=${reviewId}`);
 
   // Strategy 1: Look for nav links with camera/photo keywords
   const navLinks: Array<{href: string, text: string, pageNum: number}> = [];
@@ -226,9 +229,13 @@ async function findCameraPageNumber(baseReviewSlug: string, reviewId: string): P
     
     // Match: camera, photo, sample, or "video" + "quality" (allows words between)
     if (/camera|photo|sample/.test(text) || (text.includes('video') && text.includes('quality'))) {
+      console.log(`[findCameraPageNumber] MATCHED: "${text}" -> page ${pageNum}`);
       cameraPage = pageNum;
     }
   });
+  
+  console.log(`[findCameraPageNumber] Found ${navLinks.length} nav links:`, navLinks.map(l => `p${l.pageNum}: "${l.text}"`));
+  console.log(`[findCameraPageNumber] Camera page from Strategy 1: ${cameraPage}`);
   
   // Strategy 2: If not found, look for ANY links containing camera/photo
   if (cameraPage === null) {
@@ -560,7 +567,7 @@ async function scrapeLensDetails(cameraPageUrl: string): Promise<ILensDetail[]> 
 
   // Strategy 1: explicit class selectors — collect from ALL matching <ul>s
   $('ul.article-blurb-findings, ul.article-blurb.article-blurb-findings').each((_, ul) => {
-    $(ul).find('li').each((_, li) => { allLiItems.push(li); });
+    $(ul).find('li').each((_, li) => allLiItems.push(li));
   });
 
   // Strategy 2: if nothing found, scan every <ul> whose first <li> starts with a role <b>
@@ -568,7 +575,7 @@ async function scrapeLensDetails(cameraPageUrl: string): Promise<ILensDetail[]> 
     $('ul').each((_, ul) => {
       const firstB = $(ul).find('li').first().find('b').first().text().trim();
       if (cameraRoleRx.test(firstB)) {
-        $(ul).find('li').each((_, li) => { allLiItems.push(li); });
+        $(ul).find('li').each((_, li) => allLiItems.push(li));
       }
     });
   }
@@ -646,12 +653,17 @@ export async function getReviewDetails(reviewSlug: string): Promise<IReviewResul
 
   // Find which page has camera samples
   const cameraPageNum = await findCameraPageNumber(baseReviewSlug, reviewId);
+  console.log(`[getReviewDetails] ${baseReviewSlug}: cameraPageNum = ${cameraPageNum}`);
 
   // Scrape camera samples from camera page
   let cameraSamples: ICameraSampleCategory[] = [];
   if (cameraPageNum) {
     const cameraUrl = `${baseUrl}/${baseReviewSlug}p${cameraPageNum}.php`;
+    console.log(`[getReviewDetails] Scraping camera samples from: ${cameraUrl}`);
     cameraSamples = await scrapeCameraPage(cameraUrl);
+    console.log(`[getReviewDetails] Got ${cameraSamples.length} categories, ${cameraSamples.reduce((sum, cat) => sum + cat.images.length, 0)} total images`);
+  } else {
+    console.log(`[getReviewDetails] No camera page found for ${baseReviewSlug}`);
   }
   // Scrape lens details — try pages in order until we find 2+ lens entries.
   // GSMArena puts the article-blurb-findings list on p1, p2, or p3 depending on the review.

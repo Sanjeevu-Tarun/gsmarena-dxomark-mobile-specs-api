@@ -79,7 +79,7 @@ const KNOWN_BRANDS = [
   'Samsung', 'Apple', 'Google', 'Huawei', 'Xiaomi', 'Oppo', 'Vivo',
   'Sony', 'Nokia', 'Motorola', 'Realme', 'Honor', 'Asus', 'Meizu',
   'Pixel', 'iQOO', 'Poco', 'Redmi', 'Tecno', 'Infinix', 'Lava', 'Sharp',
-  'Nubia',
+  'Nubia','Trump'
 ];
 
 /**
@@ -246,13 +246,6 @@ function parseNextData(html: string, pageUrl: string): IDxoScore | null {
     bokeh: null as number | null,
     lowLight: null as number | null,
     selfie: null as number | null,
-    portrait: null as number | null,
-    photoMain: null as number | null,
-    photoUltraWide: null as number | null,
-    photoTele: null as number | null,
-    videoMain: null as number | null,
-    videoUltraWide: null as number | null,
-    videoTele: null as number | null,
   };
 
   const scoreMap: Record<string, string[]> = {
@@ -312,7 +305,6 @@ function parseNextData(html: string, pageUrl: string): IDxoScore | null {
     strengths: [...new Set(strengths)].slice(0, 12),
     weaknesses: [...new Set(weaknesses)].slice(0, 12),
     rankLabel, rankPosition,
-    rankSegment: null, labelType: null, labelYear: null,
     scrapedAt: new Date().toISOString(),
     _source: 'next_data',
   };
@@ -358,14 +350,11 @@ async function queryGraphQL(brand: string, model: string, pageUrl: string): Prom
             photo: safeInt(f.photoScore), video: safeInt(f.videoScore),
             audio: safeInt(f.audioScore), display: safeInt(f.displayScore),
             zoom: null, bokeh: null, lowLight: null, selfie: null,
-            portrait: null, photoMain: null, photoUltraWide: null, photoTele: null,
-            videoMain: null, videoUltraWide: null, videoTele: null,
           },
           strengths: (f.pros ?? []).map((p: any) => p?.content || p).filter(Boolean).slice(0, 12),
           weaknesses: (f.cons ?? []).map((c: any) => c?.content || c).filter(Boolean).slice(0, 12),
           rankLabel: rank ? `#${rank} Best Smartphone Camera` : null,
           rankPosition: rank,
-          rankSegment: null, labelType: null, labelYear: null,
           scrapedAt: new Date().toISOString(),
           _source: 'graphql',
         };
@@ -385,14 +374,11 @@ async function queryGraphQL(brand: string, model: string, pageUrl: string): Prom
             audio: null, display: null,
             zoom: safeInt(s.zoom), bokeh: safeInt(s.bokeh),
             lowLight: safeInt(s.lowlight), selfie: safeInt(s.selfie),
-            portrait: null, photoMain: null, photoUltraWide: null, photoTele: null,
-            videoMain: null, videoUltraWide: null, videoTele: null,
           },
           strengths: toArr(dev.pros).slice(0, 12),
           weaknesses: toArr(dev.cons).slice(0, 12),
           rankLabel: rank ? `#${rank} Best Smartphone Camera` : null,
           rankPosition: rank,
-          rankSegment: null, labelType: null, labelYear: null,
           scrapedAt: new Date().toISOString(),
           _source: 'graphql',
         };

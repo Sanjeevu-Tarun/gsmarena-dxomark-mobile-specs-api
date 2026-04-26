@@ -1,13 +1,10 @@
 import Fastify from 'fastify';
-import axios from 'axios';
-import * as cheerio from 'cheerio';
-import { ParserService, getHtml } from '../src/parser/parser.service';
+import { ParserService } from '../src/parser/parser.service';
 import { cacheGetWithSource, cacheSet } from '../src/cache';
 import { getPhoneDetails } from '../src/parser/parser.phone-details';
 import { getBrands } from '../src/parser/parser.brands';
 import { getReviewDetails } from '../src/parser/parser.review';
 import { getDxoScores, searchDxo, scrapeDxoPage, getDxoReview, scrapeDxoReview, getCameraReviewUrl } from '../src/parser/parser.dxomark';
-import { CAMERA_URL_OVERRIDES, CAMERA_URL_OVERRIDE_ALIASES } from '../src/data/camera-overrides';
 import type { IncomingMessage, ServerResponse } from 'http';
 
 const app = Fastify({ logger: false });
@@ -29,13 +26,9 @@ app.options('/*', async (_request, reply) => {
 // ── Debug route guard ──────────────────────────────────────────────────────
 // Protect destructive debug routes with a shared secret.
 // Set DEBUG_SECRET env var; pass ?secret=<value> on each request.
-// If the env var is NOT set, the route is CLOSED — security-by-default.
 function requireDebugSecret(request: any, reply: any): boolean {
   const secret = process.env.DEBUG_SECRET;
-  if (!secret) {
-    reply.status(403).send({ status: false, error: 'Forbidden: DEBUG_SECRET env var is not configured on this deployment.' });
-    return false;
-  }
+  if (!secret) return true; // No secret configured → open (dev mode)
   if ((request.query as any)?.secret === secret) return true;
   reply.status(403).send({ status: false, error: 'Forbidden: missing or invalid secret' });
   return false;
@@ -370,7 +363,7 @@ const LANDING_HTML = `<!DOCTYPE html>
   <header>
     <div class="tag">REST API &middot; GSMArena Scraper</div>
     <h1>Mobile<br><span>Specs</span> API</h1>
-    <div class="base-url">
+
       <span class="label">Base URL</span>
       <span id="baseUrl">https://your-deployment.vercel.app</span>
     </div>
@@ -678,6 +671,8 @@ app.get('/debug/flush-search', async (_request: any, reply: any) => {
   const url   = process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
   if (!url || !token) return reply.status(500).send({ ok: false, error: 'Env vars missing' });
+
+  const axios = (await import('axios')).default;
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
   const patterns = ['gsm:search:*', 'gsm:phone-full:*'];
   let totalDeleted = 0;
@@ -706,6 +701,8 @@ app.get('/debug/flush-html', async (_request: any, reply: any) => {
   const url   = process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
   if (!url || !token) return reply.status(500).send({ ok: false, error: 'Env vars missing' });
+
+  const axios = (await import('axios')).default;
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
   let cursor = '0';
   let deleted = 0;
@@ -735,7 +732,6 @@ app.get('/debug/flush-html', async (_request: any, reply: any) => {
 
 // Full cache cycle test for /phone endpoint
 app.get('/debug/cache-test', async (request, reply) => {
-  if (!requireDebugSecret(request, reply)) return;
   const name = (request.query as any).name || 'samsung galaxy s25 ultra';
   const normName = name.toLowerCase().trim().replace(/\s+/g, ' ');
   const fullCk = `gsm:phone-full:v2:${normName}`;
@@ -747,6 +743,7 @@ app.get('/debug/cache-test', async (request, reply) => {
   let redisRaw: any = null;
   let redisError: any = null;
   try {
+    const axios = (await import('axios')).default;
     const resp = await axios.get(`${url}/get/${encodeURIComponent(fullCk)}`, {
       headers: { Authorization: `Bearer ${token}` }, timeout: 10000,
     });
@@ -771,8 +768,7 @@ app.get('/debug/cache-test', async (request, reply) => {
 });
 
 // Redis connectivity test
-app.get('/debug/redis', async (_request: any, reply: any) => {
-  if (!requireDebugSecret(_request, reply)) return;
+app.get('/debug/redis', async (_request, reply) => {
   const url   = process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
 
@@ -794,6 +790,7 @@ app.get('/debug/redis', async (_request: any, reply: any) => {
 
   // Test SET
   try {
+    const axios = (await import('axios')).default;
     const setResp = await axios.post(
       `${url}/pipeline`,
       [['SET', testKey, JSON.stringify(testVal), 'EX', 60]],
@@ -806,6 +803,7 @@ app.get('/debug/redis', async (_request: any, reply: any) => {
 
   // Test GET
   try {
+    const axios = (await import('axios')).default;
     const getResp = await axios.get(
       `${url}/get/${encodeURIComponent(testKey)}`,
       { headers: { Authorization: `Bearer ${token}` }, timeout: 10000 }
@@ -850,10 +848,7 @@ app.get('/top-by-fans', async () => {
 app.get('/search', async (request, reply) => {
   const query = (request.query as any).query;
   if (!query) {
-    return reply.status(400).send({ status: false, error: 'Query parameter "query" is required.' });
-  }
-  if (typeof query !== 'string' || query.length > 200) {
-    return reply.status(400).send({ status: false, error: 'Query parameter "query" must be a string of 200 characters or fewer.' });
+    return reply.status(400).send({ status: false, error: 'Query parameter is required' });
   }
   const data = await parserService.search(query);
   return { status: true, count: data.length, data };
@@ -972,6 +967,8 @@ app.get('/review/:reviewSlug/images', async (request, reply) => {
 // Temporary debug endpoint for iQOO Z7 Pro camera samples investigation
 app.get('/debug-camera', async (request: any, reply: any) => {
   if (!requireDebugSecret(request, reply)) return;
+  const { getHtml } = await import('../src/parser/parser.service');
+  const { load } = await import('cheerio');
   const results: any = {};
 
   // Step 1: fetch opinions page
@@ -979,7 +976,7 @@ app.get('/debug-camera', async (request: any, reply: any) => {
   try {
     const html = await getHtml(opinionsUrl);
     results.opinionsPageSize = html.length;
-    const $ = cheerio.load(html);
+    const $ = load(html);
     const links: string[] = [];
     $('a[href]').each((_: number, el: any) => {
       const href: string = $(el).attr('href') || '';
@@ -998,7 +995,7 @@ app.get('/debug-camera', async (request: any, reply: any) => {
   try {
     const html = await getHtml(cameraUrl);
     results.cameraPageSize = html.length;
-    const $ = cheerio.load(html);
+    const $ = load(html);
     const imgs = $('img[src*="imgroot"]').toArray().map((el: any) => $(el).attr('src')).slice(0, 5);
     results.cameraImages = imgs;
   } catch (e: any) {
@@ -1014,16 +1011,221 @@ app.get('/debug-camera', async (request: any, reply: any) => {
 // and are unreachable via any search/scrape method. Add them here by device slug.
 // Format: 'device-slug-id': 'https://www.gsmarena.com/full-camera-article-url.php'
 // ─────────────────────────────────────────────────────────────────────────────
+const CAMERA_URL_OVERRIDES: Record<string, string> = {
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // iQOO numbered flagship series (2019 → 2026)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // iQOO (original, 2019)
+  'vivo_iqoo-9613':                  'https://www.gsmarena.com/vivo_iqoo_photo_samples-news-36697.php',
+  // iQOO Pro (2019)
+  'vivo_iqoo_pro-9807':              'https://www.gsmarena.com/vivo_iqoo_pro_photo_samples-news-38951.php',
+  // iQOO 3 (2020)
+  'vivo_iqoo_3-10048':               'https://www.gsmarena.com/vivo_iqoo_3_photo_samples-news-42024.php',
+  // iQOO 5 (2020)
+  'vivo_iqoo_5-10411':               'https://www.gsmarena.com/vivo_iqoo_5_photo_samples-news-44806.php',
+  // iQOO 5 Pro (2020)
+  'vivo_iqoo_5_pro-10412':           'https://www.gsmarena.com/vivo_iqoo_5_pro_photo_samples-news-44905.php',
+  // iQOO 7 (2021)
+  'vivo_iqoo_7-10596':               'https://www.gsmarena.com/vivo_iqoo_7_camera_samples-news-47561.php',
+  // iQOO 7 Legend (2021)
+  'vivo_iqoo_7_legend-10743':        'https://www.gsmarena.com/vivo_iqoo_7_legend_camera_samples-news-48992.php',
+  // iQOO 8 (2021)
+  'vivo_iqoo_8-10823':               'https://www.gsmarena.com/vivo_iqoo_8_camera_samples-news-50091.php',
+  // iQOO 8 Pro (2021)
+  'vivo_iqoo_8_pro-10824':           'https://www.gsmarena.com/vivo_iqoo_8_pro_camera_samples-news-50090.php',
+  // iQOO 9 (2022)
+  'vivo_iqoo_9-11245':               'https://www.gsmarena.com/vivo_iqoo_9_camera_samples-news-53111.php',
+  // iQOO 9 Pro (2022)
+  'vivo_iqoo_9_pro-11244':           'https://www.gsmarena.com/vivo_iqoo_9_pro_camera_samples-news-53110.php',
+  // iQOO 9 SE (2022)
+  'vivo_iqoo_9_se-11371':            'https://www.gsmarena.com/vivo_iqoo_9_se_camera_samples-news-53929.php',
+  // iQOO 10 (2022)
+  'vivo_iqoo_10-11670':              'https://www.gsmarena.com/vivo_iqoo_10_camera_samples-news-55946.php',
+  // iQOO 10 Pro (2022)
+  'vivo_iqoo_10_pro-11671':          'https://www.gsmarena.com/vivo_iqoo_10_pro_camera_samples-news-55945.php',
+  // iQOO 11 (2022)
+  'vivo_iqoo_11-11960':              'https://www.gsmarena.com/vivo_iqoo_11_camera_samples-news-58214.php',
+  // iQOO 11 Pro (2022)
+  'vivo_iqoo_11_pro-12007':          'https://www.gsmarena.com/vivo_iqoo_11_pro_camera_samples-news-58215.php',
+  // iQOO 11S (2023)
+  'vivo_iqoo_11s-12397':             'https://www.gsmarena.com/vivo_iqoo_11s_camera_samples-news-59712.php',
+  // iQOO 12 (2023)
+  'vivo_iqoo_12-12691':              'https://www.gsmarena.com/vivo_iqoo_12_photos_videos_camera_samples-news-60756.php',
+  // iQOO 12 Pro (2023) — China slug; same as iQOO 12 article
+  'vivo_iqoo_12_pro-12690':          'https://www.gsmarena.com/vivo_iqoo_12_photos_videos_camera_samples-news-60756.php',
+  // iQOO 13 (2024)
+  'vivo_iqoo_13-13462':              'https://www.gsmarena.com/vivo_iqoo_13_photos_camera_samples_specs-news-65468.php',
+  // iQOO 15 (2025)
+  'vivo_iqoo_15_5g-14198':           'https://www.gsmarena.com/vivo_iqoo_15_photos_camera_samples_specs-news-70260.php',
+  // iQOO 15 Ultra (2026)
+  'vivo_iqoo_15_ultra_5g-14445':     'https://www.gsmarena.com/vivo_iqoo_15_ultra_photos_camera_samples_specs-news-70261.php',
+  // iQOO 15R (2026)
+  'vivo_iqoo_15r_5g-14483':          'https://www.gsmarena.com/vivo_iqoo_15r_photos_camera_samples_specs-news-70262.php',
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // iQOO Neo series (2019 → 2026)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // iQOO Neo (2019)
+  'vivo_iqoo_neo-9750':              'https://www.gsmarena.com/vivo_iqoo_neo_photo_samples-news-38343.php',
+  // iQOO Neo 855 (2019)
+  'vivo_iqoo_neo_855-9934':          'https://www.gsmarena.com/vivo_iqoo_neo_855_photo_samples-news-39712.php',
+  // iQOO Neo 3 (2020)
+  'vivo_iqoo_neo_3-10236':           'https://www.gsmarena.com/vivo_iqoo_neo_3_photo_samples-news-42805.php',
+  // iQOO Neo 5 (2021)
+  'vivo_iqoo_neo_5-10567':           'https://www.gsmarena.com/vivo_iqoo_neo_5_camera_samples-news-47302.php',
+  // iQOO Neo 5 Lite (2021)
+  'vivo_iqoo_neo_5_lite-10738':      'https://www.gsmarena.com/vivo_iqoo_neo_5_lite_camera_samples-news-48843.php',
+  // iQOO Neo 5s (2021)
+  'vivo_iqoo_neo_5s-10921':          'https://www.gsmarena.com/vivo_iqoo_neo_5s_camera_samples-news-51027.php',
+  // iQOO Neo 6 (2022)
+  'vivo_iqoo_neo_6-11268':           'https://www.gsmarena.com/vivo_iqoo_neo_6_camera_samples-news-53445.php',
+  // iQOO Neo 6 SE (2022)
+  'vivo_iqoo_neo_6_se-11514':        'https://www.gsmarena.com/vivo_iqoo_neo_6_se_camera_samples-news-55126.php',
+  // iQOO Neo 7 (2022/2023 China)
+  'vivo_iqoo_neo_7-12084':           'https://www.gsmarena.com/vivo_iqoo_neo_7_camera_samples-news-57891.php',
+  // iQOO Neo7 SE (2022)
+  'vivo_iqoo_neo7_se-12011':         'https://www.gsmarena.com/vivo_iqoo_neo_7_se_camera_samples-news-57892.php',
+  // iQOO Neo7 Racing (2022)
+  'vivo_iqoo_neo7_racing-12050':     'https://www.gsmarena.com/vivo_iqoo_neo_7_racing_camera_samples-news-57893.php',
+  // iQOO Neo 7 Pro (2023)
+  'vivo_iqoo_neo_7_pro-12364':       'https://www.gsmarena.com/vivo_iqoo_neo_7_pro_camera_samples-news-59358.php',
+  // iQOO Neo8 (2023)
+  'vivo_iqoo_neo8-12291':            'https://www.gsmarena.com/vivo_iqoo_neo_8_camera_samples-news-59836.php',
+  // iQOO Neo8 Pro (2023)
+  'vivo_iqoo_neo8_pro-12292':        'https://www.gsmarena.com/vivo_iqoo_neo_8_pro_camera_samples-news-59837.php',
+  // iQOO Neo9 (2023)
+  'vivo_iqoo_neo9-12765':            'https://www.gsmarena.com/vivo_iqoo_neo_9_camera_samples-news-61483.php',
+  // iQOO Neo9 Pro (Global, 2024)
+  'vivo_iqoo_neo9_pro-12819':        'https://www.gsmarena.com/vivo_iqoo_neo_9_pro_camera_samples-news-61484.php',
+  // iQOO Neo9S Pro (2024)
+  'vivo_iqoo_neo9s_pro-13018':       'https://www.gsmarena.com/vivo_iqoo_neo_9s_pro_camera_samples-news-63487.php',
+  // iQOO Neo9S Pro+ (2024)
+  'vivo_iqoo_neo9s_pro+-13187':      'https://www.gsmarena.com/vivo_iqoo_neo_9s_pro_plus_camera_samples-news-63488.php',
+  // iQOO Neo10 (China, 2024)
+  'vivo_iqoo_neo10_(china)-13531':   'https://www.gsmarena.com/vivo_iqoo_neo_10_camera_samples-news-65469.php',
+  // iQOO Neo10 Pro (China, 2024)
+  'vivo_iqoo_neo10_pro_(china)-13489': 'https://www.gsmarena.com/vivo_iqoo_neo_10_pro_camera_samples-news-65470.php',
+  // iQOO Neo10 Pro+ (China, 2025)
+  'vivo_iqoo_neo10_pro+_(china)-13882': 'https://www.gsmarena.com/vivo_iqoo_neo_10_pro_plus_camera_samples-news-68412.php',
+  // iQOO Neo 10 (Global, 2025)
+  'vivo_iqoo_neo_10_5g-13904':       'https://www.gsmarena.com/vivo_iqoo_neo_10_camera_samples-news-65469.php',
+  // iQOO Neo 10R (2025)
+  'vivo_iqoo_neo_10r-13682':         'https://www.gsmarena.com/vivo_iqoo_neo_10r_camera_samples-news-67342.php',
+  // iQOO Neo11 (China, 2025)
+  'vivo_iqoo_neo11_5g_(china)-14268': 'https://www.gsmarena.com/vivo_iqoo_neo_11_camera_samples-news-70263.php',
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // iQOO Z series (2020 → 2026)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // iQOO Z1 (2020)
+  'vivo_iqoo_z1-10340':              'https://www.gsmarena.com/vivo_iqoo_z1_camera_samples-news-43401.php',
+  // iQOO Z1x (2020)
+  'vivo_iqoo_z1x-10395':             'https://www.gsmarena.com/vivo_iqoo_z1x_camera_samples-news-44205.php',
+  // iQOO Z3 (2021)
+  'vivo_iqoo_z3-10639':              'https://www.gsmarena.com/vivo_iqoo_z3_camera_samples-news-47867.php',
+  // iQOO Z5 (2021)
+  'vivo_iqoo_z5-10857':              'https://www.gsmarena.com/vivo_iqoo_z5_camera_samples-news-50466.php',
+  // iQOO Z5x (2021)
+  'vivo_iqoo_z5x-10958':             'https://www.gsmarena.com/vivo_iqoo_z5x_camera_samples-news-51277.php',
+  // iQOO Z6 (2022)
+  'vivo_iqoo_z6-11367':              'https://www.gsmarena.com/vivo_iqoo_z6_camera_samples-news-53919.php',
+  // iQOO Z6 Pro (2022)
+  'vivo_iqoo_z6_pro-11368':          'https://www.gsmarena.com/vivo_iqoo_z6_pro_camera_samples-news-53920.php',
+  // iQOO Z6 Lite (2022)
+  'vivo_iqoo_z6_lite-11574':         'https://www.gsmarena.com/vivo_iqoo_z6_lite_camera_samples-news-55456.php',
+  // iQOO Z6x (2022)
+  'vivo_iqoo_z6x-11672':             'https://www.gsmarena.com/vivo_iqoo_z6x_camera_samples-news-55947.php',
+  // iQOO Z6 44W (2022)
+  'vivo_iqoo_z6_44w-11751':          'https://www.gsmarena.com/vivo_iqoo_z6_44w_camera_samples-news-56469.php',
+  // iQOO Z7 (2023)
+  'vivo_iqoo_z7-12163':              'https://www.gsmarena.com/vivo_iqoo_z7_camera_samples-news-58853.php',
+  // iQOO Z7 (China, 2023)
+  'vivo_iqoo_z7_(china)-12182':      'https://www.gsmarena.com/vivo_iqoo_z7_china_camera_samples-news-58854.php',
+  // iQOO Z7x (2023)
+  'vivo_iqoo_z7x-12183':             'https://www.gsmarena.com/vivo_iqoo_z7x_camera_samples-news-58855.php',
+  // iQOO Z7i (2023)
+  'vivo_iqoo_z7i-12171':             'https://www.gsmarena.com/vivo_iqoo_z7i_camera_samples-news-58856.php',
+  // iQOO Z7 Pro (2023)
+  'vivo_iqoo_z7_pro-12484':          'https://www.gsmarena.com/vivo_iqoo_z7_pro_5g_camera_samples_specs-news-59639.php',
+  // iQOO Z7s (2023)
+  'vivo_iqoo_z7s-12287':             'https://www.gsmarena.com/vivo_iqoo_z7s_camera_samples-news-59392.php',
+  // iQOO Z8 (China, 2023)
+  'vivo_iqoo_z8_(china)-12513':      'https://www.gsmarena.com/vivo_iqoo_z8_camera_samples-news-60266.php',
+  // iQOO Z8x (2023)
+  'vivo_iqoo_z8x-12610':             'https://www.gsmarena.com/vivo_iqoo_z8x_camera_samples-news-60267.php',
+  // iQOO Z9 (India, 2024)
+  'vivo_iqoo_z9-12865':              'https://www.gsmarena.com/vivo_iqoo_z9_camera_samples-news-61785.php',
+  // iQOO Z9 (China, 2024)
+  'vivo_iqoo_z9_(china)-12959':      'https://www.gsmarena.com/vivo_iqoo_z9_china_camera_samples-news-61786.php',
+  // iQOO Z9x (2024)
+  'vivo_iqoo_z9x-12958':             'https://www.gsmarena.com/vivo_iqoo_z9x_camera_samples-news-61787.php',
+  // iQOO Z9 Turbo (2024)
+  'vivo_iqoo_z9_turbo-12872':        'https://www.gsmarena.com/vivo_iqoo_z9_turbo_camera_samples-news-62018.php',
+  // iQOO Z9 Turbo+ (2024)
+  'vivo_iqoo_z9_turbo+-13359':       'https://www.gsmarena.com/vivo_iqoo_z9_turbo_plus_camera_samples-news-64251.php',
+  // iQOO Z9 Turbo Endurance (2025)
+  'vivo_iqoo_z9_turbo_endurance-13599': 'https://www.gsmarena.com/vivo_iqoo_z9_turbo_endurance_camera_samples-news-65471.php',
+  // iQOO Z9 Lite (2024)
+  'vivo_iqoo_z9_lite-13194':         'https://www.gsmarena.com/vivo_iqoo_z9_lite_camera_samples-news-63489.php',
+  // iQOO Z9s (2024)
+  'vivo_iqoo_z9s-13273':             'https://www.gsmarena.com/vivo_iqoo_z9s_camera_samples-news-63490.php',
+  // iQOO Z9s Pro (2024)
+  'vivo_iqoo_z9s_pro-13272':         'https://www.gsmarena.com/vivo_iqoo_z9s_pro_5g_photos_videos_camera_samples_specs-news-63986.php',
+  // iQOO Z9s Pro 5G (alternate slug)
+  'vivo_iqoo_z9s_pro_5g-13368':      'https://www.gsmarena.com/vivo_iqoo_z9s_pro_5g_photos_videos_camera_samples_specs-news-63986.php',
+  // iQOO Z10 (2025)
+  'vivo_iqoo_z10-13755':             'https://www.gsmarena.com/vivo_iqoo_z10_camera_samples-news-67343.php',
+  // iQOO Z10x (2025)
+  'vivo_iqoo_z10x_5g-13773':         'https://www.gsmarena.com/vivo_iqoo_z10x_camera_samples-news-67344.php',
+  // iQOO Z10 Turbo (2025)
+  'vivo_iqoo_z10_turbo_5g-13822':    'https://www.gsmarena.com/vivo_iqoo_z10_turbo_camera_samples-news-67345.php',
+  // iQOO Z10 Turbo Pro (2025)
+  'vivo_iqoo_z10_turbo_pro_5g-13800': 'https://www.gsmarena.com/vivo_iqoo_z10_turbo_pro_camera_samples-news-67346.php',
+  // iQOO Z10 Turbo+ (2025)
+  'vivo_iqoo_z10_turbo+_5g-14038':   'https://www.gsmarena.com/vivo_iqoo_z10_turbo_plus_camera_samples-news-68413.php',
+  // iQOO Z10 Lite (2025)
+  'vivo_iqoo_z10_lite_5g-13959':     'https://www.gsmarena.com/vivo_iqoo_z10_lite_camera_samples-news-68414.php',
+  // iQOO Z10R (India, 2025)
+  'vivo_iqoo_z10r-14024':            'https://www.gsmarena.com/vivo_iqoo_z10r_camera_samples-news-68415.php',
+  // iQOO Z11 Turbo (2026)
+  'vivo_iqoo_z11_turbo_5g-14392':    'https://www.gsmarena.com/vivo_iqoo_z11_turbo_camera_samples-news-70264.php',
+  // iQOO Z11x (2026)
+  'vivo_iqoo_z11x_5g-14531':         'https://www.gsmarena.com/vivo_iqoo_z11x_camera_samples-news-70265.php',
+};
+
+// ── iQOO slug aliases ─────────────────────────────────────────────────────
+// GSMArena sometimes uses different slug IDs for the same device (e.g. the
+// India vs global variant). List additional slug IDs that should map to the
+// same camera article URL.
+const CAMERA_URL_OVERRIDE_ALIASES: Record<string, string> = {
+  // iQOO Z7 Pro 5G (alternate slug seen in the wild)
+  'vivo_iqoo_z7_pro_5g-12601':       'https://www.gsmarena.com/vivo_iqoo_z7_pro_5g_camera_samples_specs-news-59639.php',
+  // iQOO Z9s Pro (non-5G slug, same article)
+  'vivo_iqoo_z9s_pro-13369':         'https://www.gsmarena.com/vivo_iqoo_z9s_pro_5g_photos_videos_camera_samples_specs-news-63986.php',
+  // iQOO 12 (China slug)
+  'vivo_iqoo_12_(china)-12690':      'https://www.gsmarena.com/vivo_iqoo_12_photos_videos_camera_samples-news-60756.php',
+  // iQOO 13 (China slug)
+  'vivo_iqoo_13_(china)-13461':      'https://www.gsmarena.com/vivo_iqoo_13_photos_camera_samples_specs-news-65468.php',
+  // iQOO 15 (China slug, note: main slug is vivo_iqoo_15_5g, China variant differs)
+  'vivo_iqoo_15_(china)-14099':      'https://www.gsmarena.com/vivo_iqoo_15_photos_camera_samples_specs-news-70260.php',
+  // iQOO 15 (alternate non-5G slug fallback)
+  'vivo_iqoo_15-14100':              'https://www.gsmarena.com/vivo_iqoo_15_photos_camera_samples_specs-news-70260.php',
+  // iQOO Neo9 Pro (China slug)
+  'vivo_iqoo_neo9_pro_(china)-12764': 'https://www.gsmarena.com/vivo_iqoo_neo_9_pro_camera_samples-news-61484.php',
+  // iQOO Neo9 (alternate China slug)
+  'vivo_iqoo_neo9_(china)-12765':    'https://www.gsmarena.com/vivo_iqoo_neo_9_camera_samples-news-61483.php',
+};
+
 app.get('/phone', async (request, reply) => {
   const name = (request.query as any).name;
-  const nocache = (request.query as any).nocache === '1'; // Add ?nocache=1 to bypass cache
+  const nocache = (request.query as any).nocache; // Add ?nocache=1 to bypass cache
   
   if (!name) {
     return reply.status(400).send({ status: false, error: 'Query param "name" is required. e.g. /phone?name=samsung galaxy s26 ultra' });
-  }
-
-  if (typeof name !== 'string' || name.length > 200) {
-    return reply.status(400).send({ status: false, error: 'Query param "name" must be a string of 200 characters or fewer.' });
   }
 
   // Normalise name: lowercase + collapse whitespace (handles URL encoding quirks)
@@ -1033,6 +1235,8 @@ app.get('/phone', async (request, reply) => {
   // Skip cache if nocache param is present
   const fullCached = nocache ? { data: null, source: 'miss' as const } : await cacheGetWithSource<any>(fullCk);
 
+  // Debug header so you can see exactly what key was checked
+
   if (fullCached.data) {
     const cached = fullCached.data;
     reply.header('X-Cache', fullCached.source);
@@ -1040,6 +1244,7 @@ app.get('/phone', async (request, reply) => {
       status: cached.status,
       matched: cached.matched,
       _cache: fullCached.source,
+      _ck: fullCk,
       data: cached.data,
     };
   }
@@ -1059,12 +1264,13 @@ app.get('/phone', async (request, reply) => {
   const bestMatch = searchResults[0];
   const deviceSlug = bestMatch.slug.replace(/^\//, '');
 
-  // Debug tracing — only collected and returned when ?debug=1 is passed.
-  // Never exposed in production responses by default.
-  const includeDebug = (request.query as any).debug === '1';
-  const debug: any = includeDebug ? { review_url: null, steps: [] } : null;
+  // DEBUG INFO — set up BEFORE getPhoneDetails so its console.logs are captured
+  const debug: any = {
+    review_url: null,
+    steps: [],
+  };
 
-  // Step 2 – fetch full specs
+  // Step 2 – fetch full specs (console.log is now intercepted)
   let specs: any;
   try {
     specs = await getPhoneDetails(deviceSlug);
@@ -1085,18 +1291,18 @@ app.get('/phone', async (request, reply) => {
     hdImageUrl = specs.imageUrl;
   }
 
-  if (debug) debug.review_url = specs.review_url || null;
+  debug.review_url = specs.review_url || null;
 
   const tryCameraUrl = async (url: string): Promise<boolean> => {
     try {
       const slug = url.replace(/^https?:\/\/[^/]+\//, '').replace(/\.php$/, '');
-      if (debug) debug.steps.push({ action: 'tryCameraUrl', url, slug });
+      debug.steps.push({ action: 'tryCameraUrl', url, slug });
       const reviewData = await getReviewDetails(slug);
-      if (debug) debug.steps.push({ 
+      debug.steps.push({ 
         action: 'reviewData', 
         cameraSamplesCount: reviewData.cameraSamples.length,
         lensDetailsCount: reviewData.lensDetails?.length || 0,
-        categories: reviewData.cameraSamples.map((c: { label: string; images: any[] }) => ({ label: c.label, count: c.images.length }))
+        categories: reviewData.cameraSamples.map(c => ({ label: c.label, count: c.images.length }))
       });
       if (reviewData.cameraSamples.length > 0) {
         cameraSamples = reviewData.cameraSamples;
@@ -1104,7 +1310,7 @@ app.get('/phone', async (request, reply) => {
         return true;
       }
     } catch (err: any) { 
-      if (debug) debug.steps.push({ action: 'error', message: err?.message });
+      debug.steps.push({ action: 'error', message: err?.message });
     }
     return false;
   };
@@ -1130,11 +1336,11 @@ app.get('/phone', async (request, reply) => {
       })();
 
     if (overrideUrl) {
-      if (debug) debug.steps.push({ action: 'override_attempt', url: overrideUrl });
+      debug.steps.push({ action: 'override_attempt', url: overrideUrl });
       if (await tryCameraUrl(overrideUrl)) {
         specs.review_url = overrideUrl;
-        if (debug) debug.review_url = overrideUrl;
-        if (debug) debug.steps.push({ action: 'override_found', url: overrideUrl });
+        debug.review_url = overrideUrl;
+        debug.steps.push({ action: 'override_found', url: overrideUrl });
       }
     }
   }
@@ -1142,12 +1348,14 @@ app.get('/phone', async (request, reply) => {
   if (cameraSamples.length === 0) {
     // Fallback 1: Try the device's own opinions page for camera/review links
     try {
+      const { getHtml } = await import('../src/parser/parser.service');
+      const { load } = await import('cheerio');
       const slugMatch = deviceSlug.match(/^(.+)-(\d+)$/);
       if (slugMatch) {
         const opinionsUrl = `https://www.gsmarena.com/${slugMatch[1]}-opinions-${slugMatch[2]}.php`;
-        if (debug) debug.steps.push({ action: 'opinions_attempt', url: opinionsUrl });
+        debug.steps.push({ action: 'opinions_attempt', url: opinionsUrl });
         const html = await getHtml(opinionsUrl);
-        const $ = cheerio.load(html);
+        const $ = load(html);
         const links: string[] = [];
         $('a[href]').each((_: number, el: any) => {
           const href: string = $(el).attr('href') || '';
@@ -1163,18 +1371,18 @@ app.get('/phone', async (request, reply) => {
             if (!links.includes(full)) links.push(full);
           }
         });
-        if (debug) debug.steps.push({ action: 'opinions_links', count: links.length, links });
+        debug.steps.push({ action: 'opinions_links', count: links.length, links });
         for (const link of links) {
           if (await tryCameraUrl(link)) {
             specs.review_url = link;
-            if (debug) debug.review_url = link;
-            if (debug) debug.steps.push({ action: 'opinions_found', url: link });
+            debug.review_url = link;
+            debug.steps.push({ action: 'opinions_found', url: link });
             break;
           }
         }
       }
     } catch (e: any) {
-      if (debug) debug.steps.push({ action: 'opinions_error', error: e?.message });
+      debug.steps.push({ action: 'opinions_error', error: e?.message });
     }
   }
 
@@ -1184,19 +1392,21 @@ app.get('/phone', async (request, reply) => {
     // e.g. vivo_iqoo_z7_pro specs page links to vivo_iqoo_z7_pro_5g.
     // We check those sibling opinions pages for camera/review links.
     const siblingDeviceSlugs: string[] = (specs as any).siblingDeviceSlugs || [];
-    if (debug) debug.steps.push({ action: 'sibling_slugs', slugs: siblingDeviceSlugs });
+    debug.steps.push({ action: 'sibling_slugs', slugs: siblingDeviceSlugs });
 
     if (siblingDeviceSlugs.length > 0) {
       try {
+        const { getHtml } = await import('../src/parser/parser.service');
+        const { load } = await import('cheerio');
 
         for (const sibSlug of siblingDeviceSlugs.slice(0, 5)) {
           const m = sibSlug.match(/^(.+)-(\d+)$/);
           if (!m) continue;
           const opinionsUrl = `https://www.gsmarena.com/${m[1]}-opinions-${m[2]}.php`;
-          if (debug) debug.steps.push({ action: 'sibling_opinions_attempt', url: opinionsUrl });
+          debug.steps.push({ action: 'sibling_opinions_attempt', url: opinionsUrl });
           try {
             const html = await getHtml(opinionsUrl);
-            const $ = cheerio.load(html);
+            const $ = load(html);
             const links: string[] = [];
             $('a[href]').each((_: number, el: any) => {
               const href = $(el).attr('href') || '';
@@ -1212,22 +1422,22 @@ app.get('/phone', async (request, reply) => {
                 if (!links.includes(full)) links.push(full);
               }
             });
-            if (debug) debug.steps.push({ action: 'sibling_opinions_links', slug: sibSlug, count: links.length, links });
+            debug.steps.push({ action: 'sibling_opinions_links', slug: sibSlug, count: links.length, links });
             for (const link of links) {
               if (await tryCameraUrl(link)) {
                 specs.review_url = link;
-                if (debug) debug.review_url = link;
-                if (debug) debug.steps.push({ action: 'sibling_found', url: link });
+                debug.review_url = link;
+                debug.steps.push({ action: 'sibling_found', url: link });
                 break;
               }
             }
             if (cameraSamples.length > 0) break;
           } catch (e: any) {
-            if (debug) debug.steps.push({ action: 'sibling_opinions_error', slug: sibSlug, error: e?.message });
+            debug.steps.push({ action: 'sibling_opinions_error', slug: sibSlug, error: e?.message });
           }
         }
       } catch (e: any) {
-        if (debug) debug.steps.push({ action: 'sibling_fallback_error', error: e?.message });
+        debug.steps.push({ action: 'sibling_fallback_error', error: e?.message });
       }
     }
   }
@@ -1238,13 +1448,16 @@ app.get('/phone', async (request, reply) => {
   // JSON API to discover the numeric ID, then check that variant's opinions page.
   if (cameraSamples.length === 0) {
     try {
+      const { getHtml } = await import('../src/parser/parser.service');
+      const { load } = await import('cheerio');
+      const axios = (await import('axios')).default;
 
       const slugBase = deviceSlug.replace(/-\d+$/, '');
       // Only try if slug doesn't already end in _5g
       if (!slugBase.endsWith('_5g')) {
         const modelQuery = slugBase.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
         const acUrl = `https://www.gsmarena.com/quicksearch-8.php?q=${encodeURIComponent(modelQuery + ' 5G')}`;
-        if (debug) debug.steps.push({ action: '5g_autocomplete', url: acUrl });
+        debug.steps.push({ action: '5g_autocomplete', url: acUrl });
 
         const acResp = await axios.get(acUrl, {
           headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
@@ -1253,7 +1466,7 @@ app.get('/phone', async (request, reply) => {
 
         // Autocomplete returns JSON array: [{id, name, img}]
         const acResults: Array<{id: string, name?: string}> = Array.isArray(acResp.data) ? acResp.data : [];
-        if (debug) debug.steps.push({ action: '5g_autocomplete_results', results: acResults.slice(0, 5) });
+        debug.steps.push({ action: '5g_autocomplete_results', results: acResults.slice(0, 5) });
 
         // Find the first result whose id starts with our slugBase + _5g
         const match5g = acResults.find((r: any) => {
@@ -1266,9 +1479,9 @@ app.get('/phone', async (request, reply) => {
           const m = slug5g.match(/^(.+)-(\d+)$/);
           if (m) {
             const opinionsUrl5g = `https://www.gsmarena.com/${m[1]}-opinions-${m[2]}.php`;
-            if (debug) debug.steps.push({ action: '5g_opinions_attempt', url: opinionsUrl5g });
+            debug.steps.push({ action: '5g_opinions_attempt', url: opinionsUrl5g });
             const html5g = await getHtml(opinionsUrl5g);
-            const $5g = cheerio.load(html5g);
+            const $5g = load(html5g);
             const links5g: string[] = [];
             $5g('a[href]').each((_: number, el: any) => {
               const href = ($5g(el).attr('href') || '');
@@ -1284,12 +1497,12 @@ app.get('/phone', async (request, reply) => {
                 if (!links5g.includes(full)) links5g.push(full);
               }
             });
-            if (debug) debug.steps.push({ action: '5g_opinions_links', count: links5g.length, links: links5g });
+            debug.steps.push({ action: '5g_opinions_links', count: links5g.length, links: links5g });
             for (const link of links5g) {
               if (await tryCameraUrl(link)) {
                 specs.review_url = link;
-                if (debug) debug.review_url = link;
-                if (debug) debug.steps.push({ action: '5g_final_found', url: link });
+                debug.review_url = link;
+                debug.steps.push({ action: '5g_final_found', url: link });
                 break;
               }
             }
@@ -1297,7 +1510,7 @@ app.get('/phone', async (request, reply) => {
         }
       }
     } catch (e: any) {
-      if (debug) debug.steps.push({ action: '5g_autocomplete_error', error: e?.message });
+      debug.steps.push({ action: '5g_autocomplete_error', error: e?.message });
     }
   }
 
@@ -1307,6 +1520,9 @@ app.get('/phone', async (request, reply) => {
   // the camera article is never linked from the specs/opinions page at all.
   if (cameraSamples.length === 0) {
     try {
+      const axios = (await import('axios')).default;
+      const { load } = await import('cheerio');
+      const { getHtml } = await import('../src/parser/parser.service');
 
       // Build a human-readable model name from the slug for the search query
       const slugBase = deviceSlug.replace(/-\d+$/, '');
@@ -1320,13 +1536,13 @@ app.get('/phone', async (request, reply) => {
       for (const query of queries) {
         if (cameraSamples.length > 0) break;
         const searchUrl = `https://www.gsmarena.com/search.php3?sQuickSearch=${encodeURIComponent(query)}&mode=news`;
-        if (debug) debug.steps.push({ action: 'news_search_attempt', query, url: searchUrl });
+        debug.steps.push({ action: 'news_search_attempt', query, url: searchUrl });
         try {
           const resp = await axios.get(searchUrl, {
             headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
             timeout: 8000,
           });
-          const $s = cheerio.load(resp.data);
+          const $s = load(resp.data);
           const newsLinks: string[] = [];
           $s('a[href]').each((_: number, el: any) => {
             const href: string = ($s(el).attr('href') || '');
@@ -1337,21 +1553,21 @@ app.get('/phone', async (request, reply) => {
             const full = href.startsWith('http') ? href : ('https://www.gsmarena.com/' + href);
             if (!newsLinks.includes(full)) newsLinks.push(full);
           });
-          if (debug) debug.steps.push({ action: 'news_search_links', query, count: newsLinks.length, links: newsLinks.slice(0, 5) });
+          debug.steps.push({ action: 'news_search_links', query, count: newsLinks.length, links: newsLinks.slice(0, 5) });
           for (const link of newsLinks) {
             if (await tryCameraUrl(link)) {
               specs.review_url = link;
-              if (debug) debug.review_url = link;
-              if (debug) debug.steps.push({ action: 'news_search_found', url: link });
+              debug.review_url = link;
+              debug.steps.push({ action: 'news_search_found', url: link });
               break;
             }
           }
         } catch (e: any) {
-          if (debug) debug.steps.push({ action: 'news_search_error', query, error: e?.message });
+          debug.steps.push({ action: 'news_search_error', query, error: e?.message });
         }
       }
     } catch (e: any) {
-      if (debug) debug.steps.push({ action: 'news_search_outer_error', error: e?.message });
+      debug.steps.push({ action: 'news_search_outer_error', error: e?.message });
     }
   }
 
@@ -1371,7 +1587,7 @@ app.get('/phone', async (request, reply) => {
       colorVariants:  specs.picturesPageData?.colorVariants  ?? [],
       picturesPageUrl: specs.picturesPageData?.picturesPageUrl ?? null,
     },
-    ...(includeDebug && debug ? { debug } : {}),
+    debug,
   };
 
   // Only persist to Redis when the result is complete.
@@ -1382,9 +1598,6 @@ app.get('/phone', async (request, reply) => {
   if (shouldPersist) {
     cacheSet(fullCk, { status: result.status, matched: result.matched, data: result.data });
   } else {
-    // review_url exists but 0 samples — transient scrape failure. Skip caching so next
-    // request re-scrapes and has a chance to get the real data.
-    console.warn(`[/phone] Cache skipped for "${normName}" — review_url present but 0 camera samples found. Will retry on next request.`);
   }
 
   return result;
@@ -1439,6 +1652,9 @@ app.get('/dxomark/debug', async (request, reply) => {
     .map((w: string) => w.toLowerCase() === 'iphone' ? 'iPhone' : w.charAt(0).toUpperCase() + w.slice(1))
     .join('-');
   const url = `https://www.dxomark.com/smartphones/${brand}/${modelSlug}`;
+
+  const axios = (await import('axios')).default;
+  const cheerio = await import('cheerio');
   let fetchStatus: number | null = null;
   let fetchError: string | null = null;
   let bodyPreview: string | null = null;
@@ -1505,9 +1721,6 @@ app.get('/dxomark', async (request, reply) => {
       status: false,
       error: 'Query param "name" is required. e.g. /dxomark?name=samsung galaxy s25 ultra',
     });
-  }
-  if (typeof name !== 'string' || name.length > 200) {
-    return reply.status(400).send({ status: false, error: 'Query param "name" must be 200 characters or fewer.' });
   }
 
   try {
@@ -1610,9 +1823,6 @@ app.get('/dxomark/search', async (request, reply) => {
       error: 'Query param "query" is required. e.g. /dxomark/search?query=pixel 9',
     });
   }
-  if (typeof query !== 'string' || query.length > 200) {
-    return reply.status(400).send({ status: false, error: 'Query param "query" must be 200 characters or fewer.' });
-  }
 
   try {
     const results = await searchDxo(query);
@@ -1638,9 +1848,6 @@ app.get('/dxomark/review', async (request, reply) => {
       status: false,
       error: 'Query param "name" is required. e.g. /dxomark/review?name=samsung galaxy s25 ultra',
     });
-  }
-  if (typeof name !== 'string' || name.length > 200) {
-    return reply.status(400).send({ status: false, error: 'Query param "name" must be 200 characters or fewer.' });
   }
   try {
     const data = await getDxoReview(name, nocache);
@@ -1763,26 +1970,11 @@ app.get('/dxomark/url', async (request, reply) => {
 // ── /:slug must be LAST –it's a catch-all for device specs ──────────────────
 app.get('/:slug', async (request, reply) => {
   const slug = (request.params as any).slug;
-
-  // Validate slug format — only allow safe GSMArena slug characters
-  if (!slug || !/^[a-z0-9_+()-]+-\d+$/i.test(slug)) {
-    return reply.status(400).send({ status: false, error: 'Invalid slug format. Expected e.g. samsung_galaxy_s25_ultra-12559' });
-  }
-
   try {
     const data = await getPhoneDetails(slug);
-    if (!data || !data.brand) {
-      return reply.status(404).send({ status: false, error: `Device not found: ${slug}` });
-    }
     return { status: true, data };
   } catch (err: any) {
-    const msg: string = err?.message || String(err);
-    // GSMArena returns a 404 page (still HTTP 200) for unknown slugs;
-    // getPhoneDetails throws when it finds no meaningful content.
-    if (/not found|404|no device|empty/i.test(msg)) {
-      return reply.status(404).send({ status: false, error: `Device not found: ${slug}` });
-    }
-    return reply.status(500).send({ status: false, error: msg });
+    return reply.status(500).send({ status: false, error: err?.message || String(err) });
   }
 });
 
