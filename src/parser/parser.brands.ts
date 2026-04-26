@@ -46,13 +46,12 @@ export async function getBrands(): Promise<Record<string, IBrandDetails>> {
 
     if (valid.length > 0) {
       foundSelector = sel;
-      console.log(`[getBrands] using selector "${sel}" — found ${valid.length} brand cells`);
       break;
     }
   }
 
   if (!foundSelector) {
-    console.warn('[getBrands] No selector matched. HTML snippet:', html.slice(0, 500));
+    // No selector matched — GSMArena may have changed its markup. Return empty rather than crash.
     return brands;
   }
 
