@@ -1096,7 +1096,7 @@ app.get('/phone', async (request, reply) => {
         action: 'reviewData', 
         cameraSamplesCount: reviewData.cameraSamples.length,
         lensDetailsCount: reviewData.lensDetails?.length || 0,
-        categories: reviewData.cameraSamples.map(c => ({ label: c.label, count: c.images.length }))
+        categories: reviewData.cameraSamples.map((c: { label: string; images: any[] }) => ({ label: c.label, count: c.images.length }))
       });
       if (reviewData.cameraSamples.length > 0) {
         cameraSamples = reviewData.cameraSamples;

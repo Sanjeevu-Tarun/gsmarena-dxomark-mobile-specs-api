@@ -27,15 +27,15 @@
  */
 
 import * as cheerio from 'cheerio';
-import { baseUrl } from '../config';
-import { getHtml } from './parser.service';
+import { baseUrl } from './config';
+import { getHtml } from './parser/parser.service';
 import {
   IReviewResult,
   ICameraSampleCategory,
   ICameraSample,
   IReviewGallerySection,
   ILensDetail,
-} from '../types';
+} from './types';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -134,8 +134,14 @@ function isCameraSampleImage(src: string): boolean {
  *   - /imgroot/news/...
  *   - /imgroot/articles/...
  * We accept any real content image from the GSMArena CDN that isn't a UI chrome element.
+ *
+ * @param src - The image src URL to test.
+ * @param articleFolder - The article's own folder name extracted from the page URL
+ *   (e.g. "vivo_iqoo_z10_camera_samples-news-67343"). When provided, /inline/ images
+ *   are only accepted if their CDN path contains this same folder — this prevents
+ *   "related articles" widgets from bleeding in images from unrelated articles.
  */
-function isNewsPageCameraImage(src: string): boolean {
+function isNewsPageCameraImage(src: string, articleFolder?: string): boolean {
   if (!src) return false;
   if (!isContentImage(src)) return false;
   // Must be from GSMArena CDN
@@ -147,12 +153,27 @@ function isNewsPageCameraImage(src: string): boolean {
   if (/\/-\d+x\d+\//.test(src)) return false;
   // Accept standard review camera images
   if (isCameraSampleImage(src)) return true;
-  // Accept news/article CDN paths — but only /camera/ and /inline/ sections
-  // (these are the actual sample image directories on news pages)
-  if (src.includes('/imgroot/news/') && (src.includes('/camera/') || src.includes('/inline/'))) return true;
-  if (src.includes('/imgroot/articles/') && (src.includes('/camera/') || src.includes('/inline/'))) return true;
+  // Accept news/article CDN paths — /camera/ subdirs are always article-specific, so
+  // they're unconditionally safe. /inline/ images appear in BOTH the article body AND
+  // in embedded "related article" widgets on the same page; for /inline/ we therefore
+  // require the image path to contain the article's own folder name when it is known.
+  const inSrc = (path: string) => src.includes(path);
+  if (inSrc('/imgroot/news/') || inSrc('/imgroot/articles/')) {
+    if (inSrc('/camera/')) return true;
+    if (inSrc('/inline/')) {
+      // If we know which article we're scraping, only accept inline images from
+      // that article's own folder. Unrelated-article images have a different folder
+      // in their path (e.g. /imgroot/news/25/04/huawei-mate-xt-sales-numbers/inline/...)
+      // and will be rejected.
+      if (articleFolder) {
+        return src.includes(articleFolder);
+      }
+      // No article folder known — fall back to accepting all inline (old behaviour)
+      return true;
+    }
+  }
   // Accept /vv/pics/ (device press shots used on some news camera pages)
-  if (src.includes('/vv/pics/')) return true;
+  if (inSrc('/vv/pics/')) return true;
   return false;
 }
 
@@ -206,6 +227,7 @@ async function findCameraPageNumber(baseReviewSlug: string, reviewId: string): P
   try {
     html = await getHtml(reviewUrl);
   } catch {
+    console.error(`[findCameraPageNumber] Failed to fetch ${reviewUrl}`);
     return null;
   }
 
@@ -213,6 +235,8 @@ async function findCameraPageNumber(baseReviewSlug: string, reviewId: string): P
 
   // Look for nav links pointing to pN pages and find the one labelled "camera"
   let cameraPage: number | null = null;
+  
+  console.log(`[findCameraPageNumber] Searching for camera page in ${baseReviewSlug}, reviewId=${reviewId}`);
 
   // Strategy 1: Look for nav links with camera/photo keywords
   const navLinks: Array<{href: string, text: string, pageNum: number}> = [];
@@ -226,9 +250,13 @@ async function findCameraPageNumber(baseReviewSlug: string, reviewId: string): P
     
     // Match: camera, photo, sample, or "video" + "quality" (allows words between)
     if (/camera|photo|sample/.test(text) || (text.includes('video') && text.includes('quality'))) {
+      console.log(`[findCameraPageNumber] MATCHED: "${text}" -> page ${pageNum}`);
       cameraPage = pageNum;
     }
   });
+  
+  console.log(`[findCameraPageNumber] Found ${navLinks.length} nav links:`, navLinks.map(l => `p${l.pageNum}: "${l.text}"`));
+  console.log(`[findCameraPageNumber] Camera page from Strategy 1: ${cameraPage}`);
   
   // Strategy 2: If not found, look for ANY links containing camera/photo
   if (cameraPage === null) {
@@ -383,6 +411,23 @@ async function scrapeCameraPage(url: string, isNewsPage = false): Promise<ICamer
     return [];
   }
 
+  // For news pages, derive a folder-scoping token to prevent related-article widget
+  // images from leaking in as camera samples.
+  //
+  // Problem: The slug uses underscores (vivo_iqoo_z10_camera_samples-news-67343) but
+  // GSMArena CDN paths use hyphens (…/vivo-iqoo-z10-camera-samples/inline/…), so a
+  // full-slug match never works. Instead we extract the numeric article ID (e.g. 67343)
+  // which appears verbatim in BOTH the slug AND the CDN path.
+  //
+  // e.g. "https://www.gsmarena.com/vivo_iqoo_z10_camera_samples-news-67343.php"
+  //   -> articleFolder = "67343"
+  // CDN path: /imgroot/news/25/04/vivo-iqoo-z10-camera-samples-67343/inline/…
+  //   -> includes("67343") = true  ✓
+  // Unrelated: /imgroot/news/25/04/huawei-mate-xt-sales-numbers/inline/…
+  //   -> includes("67343") = false  ✓ rejected
+  const articleIdMatch = isNewsPage ? url.match(/-news-(\d+)\.php$/) : null;
+  const articleFolder: string | undefined = articleIdMatch ? articleIdMatch[1] : undefined;
+
   const $ = cheerio.load(html);
   const categoryMap = new Map<string, ICameraSample[]>();
   const seen = new Set<string>();
@@ -391,7 +436,7 @@ async function scrapeCameraPage(url: string, isNewsPage = false): Promise<ICamer
     // Check both src and data-src (news pages lazy-load via data-src)
     const src = $(el).attr('src') || $(el).attr('data-src') || '';
     // Use relaxed detection for news/article pages; strict for standard review pages
-    const isValid = isNewsPage ? isNewsPageCameraImage(src) : isCameraSampleImage(src);
+    const isValid = isNewsPage ? isNewsPageCameraImage(src, articleFolder) : isCameraSampleImage(src);
     if (!isValid) return;
 
     const thumbUrl = cleanImgUrl(src);
@@ -646,12 +691,17 @@ export async function getReviewDetails(reviewSlug: string): Promise<IReviewResul
 
   // Find which page has camera samples
   const cameraPageNum = await findCameraPageNumber(baseReviewSlug, reviewId);
+  console.log(`[getReviewDetails] ${baseReviewSlug}: cameraPageNum = ${cameraPageNum}`);
 
   // Scrape camera samples from camera page
   let cameraSamples: ICameraSampleCategory[] = [];
   if (cameraPageNum) {
     const cameraUrl = `${baseUrl}/${baseReviewSlug}p${cameraPageNum}.php`;
+    console.log(`[getReviewDetails] Scraping camera samples from: ${cameraUrl}`);
     cameraSamples = await scrapeCameraPage(cameraUrl);
+    console.log(`[getReviewDetails] Got ${cameraSamples.length} categories, ${cameraSamples.reduce((sum, cat) => sum + cat.images.length, 0)} total images`);
+  } else {
+    console.log(`[getReviewDetails] No camera page found for ${baseReviewSlug}`);
   }
   // Scrape lens details — try pages in order until we find 2+ lens entries.
   // GSMArena puts the article-blurb-findings list on p1, p2, or p3 depending on the review.
