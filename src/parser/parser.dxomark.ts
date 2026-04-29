@@ -71,15 +71,82 @@ export interface IDxoSearchResult {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const KNOWN_BRANDS = [
-  // Multi-word first — must come before their single-word prefixes
-  'Google Pixel', 'Xiaomi Poco', 'Xiaomi Redmi', 'Vivo iQOO',
-  'Samsung Galaxy', 'Apple iPhone',
-  // Single-word
-  'Nothing', 'OnePlus', 'BlackBerry', 'HTC', 'ZTE', 'TCL', 'LG',
-  'Samsung', 'Apple', 'Google', 'Huawei', 'Xiaomi', 'Oppo', 'Vivo',
-  'Sony', 'Nokia', 'Motorola', 'Realme', 'Honor', 'Asus', 'Meizu',
-  'Pixel', 'iQOO', 'Poco', 'Redmi', 'Tecno', 'Infinix', 'Lava', 'Sharp',
-  'Nubia','Trump'
+  // ── Multi-word sub-brands FIRST — prevents partial matches ───────────────────
+  // These must appear before their single-word parent brands
+  'Google Pixel',
+  'Apple iPhone',
+  'Samsung Galaxy',
+  'Xiaomi Poco',
+  'Xiaomi Redmi',
+  'Vivo iQOO',
+  'Asus ROG',          // ROG Phone series
+  'Asus Zenfone',
+  'Sony Xperia',
+  'ZTE Nubia',
+  'Lenovo Legion',     // Legion Phone series
+  'Lenovo ThinkPhone',
+  'Huawei Honor',      // before Huawei & Honor as standalone
+  'Nothing Phone',
+  'Motorola Moto',     // "Motorola Moto G / Edge / Razr"
+  'Nokia G',
+  'Nokia X',
+  'Nokia C',
+  'OnePlus Nord',
+  'Realme GT',
+  'Realme Narzo',
+  'TCL Stylus',
+  'TCL 30',
+  'Oppo Reno',
+  'Oppo Find',
+  'Oppo A',
+
+  // ── Single-word brands (alphabetical within tier) ────────────────────────────
+  'Alcatel',
+  'Apple',
+  'Asus',
+  'BlackBerry',
+  'Blackview',
+  'BLU',
+  'CAT',               // Caterpillar rugged phones marketed as "Cat"
+  'Coolpad',
+  'Cubot',
+  'Doogee',
+  'Energizer',
+  'Fairphone',
+  'Google',
+  'Honor',
+  'HTC',
+  'Huawei',
+  'Infinix',
+  'iQOO',
+  'Itel',
+  'Kyocera',
+  'Lava',
+  'Lenovo',
+  'LG',
+  'Meizu',
+  'Motorola',
+  'Nokia',
+  'Nothing',
+  'Nubia',
+  'OnePlus',
+  'Oppo',
+  'Oukitel',
+  'Pixel',             // standalone "Pixel 9" without "Google"
+  'Poco',              // standalone "Poco F7"
+  'Realme',
+  'Redmi',             // standalone "Redmi Note 14"
+  'Samsung',
+  'Sharp',
+  'Sony',
+  'Tecno',
+  'TCL',
+  'Ulefone',
+  'Umidigi',
+  'Vivo',
+  'Wiko',
+  'Xiaomi',
+  'ZTE',
 ];
 
 /**
@@ -91,18 +158,99 @@ const KNOWN_BRANDS = [
  *      "Xiaomi Redmi Note 14"→ DXOMark brand is "Redmi"
  */
 const DXO_BRAND_MAP: Record<string, { brand: string; modelPrefix?: string }> = {
+  // ── Google / Pixel ───────────────────────────────────────────────────────────
   'Google Pixel': { brand: 'Google', modelPrefix: 'Pixel' }, // "google pixel 9 pro" → Google/Pixel-9-Pro
-  'Pixel':        { brand: 'Google', modelPrefix: 'Pixel' }, // "pixel 9 pro" → Google/Pixel-9-Pro
+  'Pixel':        { brand: 'Google', modelPrefix: 'Pixel' }, // bare "pixel 9 pro"   → Google/Pixel-9-Pro
+
+  // ── Apple ────────────────────────────────────────────────────────────────────
+  'Apple iPhone': { brand: 'Apple', modelPrefix: 'iPhone' },
+
+  // ── Samsung ──────────────────────────────────────────────────────────────────
+  'Samsung Galaxy': { brand: 'Samsung', modelPrefix: 'Galaxy' },
+
+  // ── Xiaomi sub-brands ────────────────────────────────────────────────────────
   'Xiaomi Poco':  { brand: 'Xiaomi', modelPrefix: 'Poco' },
   'Xiaomi Redmi': { brand: 'Xiaomi', modelPrefix: 'Redmi' },
-  'Vivo iQOO':    { brand: 'Vivo',   modelPrefix: 'iQOO' },
-  'Samsung Galaxy': { brand: 'Samsung', modelPrefix: 'Galaxy' },
-  'Apple iPhone':   { brand: 'Apple',   modelPrefix: 'iPhone' },
+  'Poco':         { brand: 'Xiaomi', modelPrefix: 'Poco' },   // bare "Poco F7"
+  'Redmi':        { brand: 'Xiaomi', modelPrefix: 'Redmi' },  // bare "Redmi Note 14"
+
+  // ── Vivo sub-brands ──────────────────────────────────────────────────────────
+  'Vivo iQOO':  { brand: 'Vivo', modelPrefix: 'iQOO' },
+  'iQOO':       { brand: 'Vivo', modelPrefix: 'iQOO' },       // bare "iQOO 13"
+
+  // ── Asus sub-brands ──────────────────────────────────────────────────────────
+  // DXOMark uses "Asus" as brand and keeps "ROG Phone" / "Zenfone" in the model
+  'Asus ROG':     { brand: 'Asus', modelPrefix: 'ROG Phone' },
+  'Asus Zenfone': { brand: 'Asus', modelPrefix: 'Zenfone' },
+
+  // ── Sony ─────────────────────────────────────────────────────────────────────
+  'Sony Xperia': { brand: 'Sony', modelPrefix: 'Xperia' },
+
+  // ── ZTE / Nubia ──────────────────────────────────────────────────────────────
+  'ZTE Nubia': { brand: 'ZTE', modelPrefix: 'Nubia' },
+  'Nubia':     { brand: 'ZTE', modelPrefix: 'Nubia' },
+
+  // ── Lenovo sub-brands ────────────────────────────────────────────────────────
+  'Lenovo Legion':    { brand: 'Lenovo', modelPrefix: 'Legion Phone' },
+  'Lenovo ThinkPhone': { brand: 'Lenovo', modelPrefix: 'ThinkPhone' },
+
+  // ── Huawei / Honor ───────────────────────────────────────────────────────────
+  // Honor is now independent, but some DXOMark pages still list it under Huawei
+  'Huawei Honor': { brand: 'Huawei', modelPrefix: 'Honor' },
+
+  // ── Motorola ─────────────────────────────────────────────────────────────────
+  // DXOMark uses "Motorola" as brand; "Moto" prefix is kept in the model slug
+  'Motorola Moto': { brand: 'Motorola', modelPrefix: 'Moto' },
+
+  // ── OnePlus ──────────────────────────────────────────────────────────────────
+  'OnePlus Nord': { brand: 'OnePlus', modelPrefix: 'Nord' },
+
+  // ── Realme ───────────────────────────────────────────────────────────────────
+  'Realme GT':    { brand: 'Realme', modelPrefix: 'GT' },
+  'Realme Narzo': { brand: 'Realme', modelPrefix: 'Narzo' },
+
+  // ── Nothing ──────────────────────────────────────────────────────────────────
+  'Nothing Phone': { brand: 'Nothing', modelPrefix: 'Phone' },
+
+  // ── Oppo sub-lines ───────────────────────────────────────────────────────────
+  'Oppo Reno': { brand: 'Oppo', modelPrefix: 'Reno' },
+  'Oppo Find': { brand: 'Oppo', modelPrefix: 'Find' },
+  'Oppo A':    { brand: 'Oppo', modelPrefix: 'A' },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers
+// Generic tokens — ignored during brand/model matching so they don't pollute
+// slug generation or confuse sibling-device comparisons.
+// Includes: all known brand names, sub-brands, form-factor descriptors,
+// connectivity suffixes, and common marketing qualifiers.
 // ─────────────────────────────────────────────────────────────────────────────
+
+const GENERIC_TOKENS = new Set<string>([
+  // ── Brand / sub-brand names (lowercase) ──────────────────────────────────
+  'alcatel', 'apple', 'asus', 'blackberry', 'blackview', 'blu', 'cat',
+  'coolpad', 'cubot', 'doogee', 'energizer', 'fairphone', 'google', 'honor',
+  'htc', 'huawei', 'infinix', 'iqoo', 'itel', 'kyocera', 'lava', 'lenovo',
+  'lg', 'meizu', 'motorola', 'nokia', 'nothing', 'nubia', 'oneplus', 'oppo',
+  'oukitel', 'pixel', 'poco', 'realme', 'redmi', 'samsung', 'sharp', 'sony',
+  'tecno', 'tcl', 'ulefone', 'umidigi', 'vivo', 'wiko', 'xiaomi', 'zte',
+  // Sub-brand tokens that can appear standalone
+  'rog', 'zenfone', 'xperia', 'legion', 'thinkphone', 'galaxy', 'iphone',
+  'moto', 'nord', 'narzo', 'reno', 'find',
+
+  // ── Form-factor / product-line descriptors ────────────────────────────────
+  'fold', 'flip', 'tab', 'pad', 'go', 'play', 'power', 'zoom', 'active',
+  'prime', 'classic', 'neo', 'lite', 'plus', 'max', 'mini', 'slim',
+  'edge', 'note', 'ultra', 'pro', 'max', 'fe', 'se',
+
+  // ── Connectivity / generation suffixes ────────────────────────────────────
+  '5g', '4g', 'lte', 'wifi', 'nfc',
+
+  // ── Common model-name qualifiers ─────────────────────────────────────────
+  'new', 'official', 'global', 'india', 'china', 'europe', 'dual', 'sim',
+  'review', 'test', 'score', 'camera',
+]);
+
+
 
 const DXO_BASE = 'https://www.dxomark.com';
 
@@ -190,17 +338,41 @@ function splitBrandModel(deviceName: string): { brand: string; model: string } {
 // URL builder — /smartphones/{Brand}/{Model-Slug}
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Tokens that must be preserved in their exact casing when building slugs.
+ * Evaluated BEFORE the generic title-case logic.
+ */
+const PRESERVE_CASE: Record<string, string> = {
+  iphone:  'iPhone',
+  '5g':    '5G',
+  '4g':    '4G',
+  lte:     'LTE',
+  rog:     'ROG',
+  iqoo:    'iQOO',
+};
+
 function buildDxoUrl(brand: string, model: string): string {
-  // DXOMark uses title case: "9 pro" → "9-Pro", "Galaxy S25 Ultra" → "Galaxy-S25-Ultra"
-  // Special case: "iPhone" must stay as "iPhone" not become "IPhone"
-  const modelSlug = model
-    .trim()
+  // 1. Strip rogue parentheses and their contents — "()" or "(text)" break routing
+  const cleanModel = model
+    .replace(/\([^)]*\)/g, '')   // remove "(anything)" including empty "()"
+    .replace(/[()]/g, '')         // strip any orphaned parens left over
+    .trim();
+
+  // 2. Title-case each token, preserving special cases
+  const modelSlug = cleanModel
     .split(/\s+/)
+    .filter(Boolean)
     .map(w => {
-      if (w.toLowerCase() === 'iphone') return 'iPhone';
+      const lower = w.toLowerCase();
+      // Connectivity suffixes: /^[45]g$/i → "5G" / "4G"
+      if (/^[45]g$/i.test(w)) return w.toUpperCase();
+      // Lookup preserve-case map
+      if (PRESERVE_CASE[lower]) return PRESERVE_CASE[lower];
+      // Default: title-case
       return w.charAt(0).toUpperCase() + w.slice(1);
     })
     .join('-');
+
   return `${DXO_BASE}/smartphones/${brand}/${modelSlug}`;
 }
 
@@ -246,6 +418,13 @@ function parseNextData(html: string, pageUrl: string): IDxoScore | null {
     bokeh: null as number | null,
     lowLight: null as number | null,
     selfie: null as number | null,
+    portrait: null as number | null,
+    photoMain: null as number | null,
+    photoUltraWide: null as number | null,
+    photoTele: null as number | null,
+    videoMain: null as number | null,
+    videoUltraWide: null as number | null,
+    videoTele: null as number | null,
   };
 
   const scoreMap: Record<string, string[]> = {
@@ -350,6 +529,8 @@ async function queryGraphQL(brand: string, model: string, pageUrl: string): Prom
             photo: safeInt(f.photoScore), video: safeInt(f.videoScore),
             audio: safeInt(f.audioScore), display: safeInt(f.displayScore),
             zoom: null, bokeh: null, lowLight: null, selfie: null,
+            portrait: null, photoMain: null, photoUltraWide: null, photoTele: null,
+            videoMain: null, videoUltraWide: null, videoTele: null,
           },
           strengths: (f.pros ?? []).map((p: any) => p?.content || p).filter(Boolean).slice(0, 12),
           weaknesses: (f.cons ?? []).map((c: any) => c?.content || c).filter(Boolean).slice(0, 12),
@@ -374,6 +555,8 @@ async function queryGraphQL(brand: string, model: string, pageUrl: string): Prom
             audio: null, display: null,
             zoom: safeInt(s.zoom), bokeh: safeInt(s.bokeh),
             lowLight: safeInt(s.lowlight), selfie: safeInt(s.selfie),
+            portrait: null, photoMain: null, photoUltraWide: null, photoTele: null,
+            videoMain: null, videoUltraWide: null, videoTele: null,
           },
           strengths: toArr(dev.pros).slice(0, 12),
           weaknesses: toArr(dev.cons).slice(0, 12),
@@ -929,13 +1112,31 @@ export async function scrapeDxoReview(reviewUrl: string, nocache = false): Promi
   function isValidDxoImage(url: string): boolean {
     if (!url || url.startsWith('data:')) return false;
     const lower = url.toLowerCase();
+
+    // Hard-reject non-raster types
     if (lower.includes('.svg')) return false;
-    if (/\b(icon|logo|badge|sprite|pixel\.gif|blank|placeholder)\b/.test(lower)) return false;
-    // Must be a real image extension
-    if (!/\.(jpe?g|png|webp)($|\?)/i.test(lower)) return false;
+    if (lower.endsWith('.gif')) return false;   // pixel trackers / animated placeholders
+
+    // Hard-reject known decoration/icon patterns
+    if (/\b(icon|logo|badge|sprite|blank|placeholder|1x1|pixel|avatar|favicon|loading)\b/.test(lower)) return false;
+
+    // Must carry a real raster extension (before query string)
+    if (!/\.(jpe?g|png|webp)(\?|$)/i.test(lower)) return false;
+
+    // For absolute URLs, whitelist known image-serving domains
     if (url.startsWith('http') || url.startsWith('//')) {
-      return lower.includes('dxomark.com') || lower.includes('imgix') || lower.includes('imgproxy');
+      return (
+        lower.includes('dxomark.com')   ||
+        lower.includes('imgix.net')     ||
+        lower.includes('imgix.com')     ||
+        lower.includes('imgproxy')      ||
+        lower.includes('wp-content')    ||   // WordPress media CDN
+        lower.includes('cloudfront.net')||   // AWS CloudFront (sometimes used)
+        lower.includes('cloudinary.com')     // Cloudinary CDN
+      );
     }
+
+    // Relative URLs are fine (will be resolved later)
     return true;
   }
 
@@ -967,28 +1168,67 @@ export async function scrapeDxoReview(reviewUrl: string, nocache = false): Promi
       const fullResUrl = resolveRelative(href);
 
       // ── Caption extraction ──────────────────────────────────────────────────
-      // DXOMark uses WordPress blocks. Two structures seen:
+      // DXOMark uses WordPress blocks. Known structures:
       //   A) <figure class="wp-block-image"><a href="full"><img></a><figcaption>text</figcaption></figure>
       //   B) <p><a href="full"><img></a></p>  <p>Caption text</p>
+      //   C) <figure>…</figure><figcaption>text</figcaption>  (figcaption is figure sibling)
+      //   D) <a><img></a><em>caption</em>  (inline em immediately after)
+      //   E) <figure><img></figure><p class="caption">text</p>  (paragraph sibling)
       let caption: string | null = null;
 
-      // A) figcaption inside same figure ancestor
+      // Helper: clean and validate a candidate caption string
+      const cleanCaption = (raw: string): string | null => {
+        const t = raw.replace(/\s+/g, ' ').replace(/,\s*,/g, ',').replace(/,\s*and\s*,/g, ' and').replace(/\(\s*\)/g, '').trim();
+        // Must have letters, be non-trivially short, not be a heading-level phrase
+        if (t.length < 5 || t.length > 300) return null;
+        if (!/[a-zA-Z]/.test(t)) return null;
+        if (/^\s*(best|top score|portrait|lowlight|zoom|outdoor|indoor|photo|video|main|bokeh|selfie|ultra.?wide|tele)\s*$/i.test(t)) return null;
+        return t;
+      };
+
+      // A) figcaption inside closest figure ancestor
       const fig = $(el).closest('figure');
       if (fig.length) {
-        const fc = fig.find('figcaption').first().text().trim();
-        if (fc.length > 4) caption = fc.replace(/\s+/g, ' ').replace(/,\s*,/g, ',').replace(/,\s*and\s*,/g, ' and').replace(/\(\s*\)/g, '').trim();
+        const fc = fig.find('figcaption').first().text();
+        caption = cleanCaption(fc);
       }
 
-      // B) next element sibling of parent, or grandparent
+      // C) figcaption as a sibling of the figure (outside it)
+      if (!caption && fig.length) {
+        const siblingFigcaption = fig.next('figcaption');
+        if (siblingFigcaption.length) caption = cleanCaption(siblingFigcaption.text());
+      }
+
+      // D) <em> immediately after the <a> (inline WordPress pattern)
       if (!caption) {
-        // try parent's next sibling
+        const nextEm = $(el).next('em');
+        if (nextEm.length) caption = cleanCaption(nextEm.text());
+      }
+
+      // B + E) next element sibling of parent <p> or grandparent
+      if (!caption) {
+        // Try parent's next sibling
         let next = $(el).parent().next();
-        // if parent is also just <a> (no wrapper), go up one more
+        // If parent is also just <a> (no wrapper), go up one more
         if (!next.length || next.is('a')) next = $(el).parent().parent().next();
-        const nextTxt = next.length ? next.clone().find('a,img,figure').remove().end().text().trim() : '';
-        // Caption: short, has letters, not a heading-level text
-        if (nextTxt.length > 5 && nextTxt.length < 250 && /[a-zA-Z]/.test(nextTxt) && !/^\s*(best|top score|portrait|lowlight|zoom|outdoor|indoor|photo|video)/i.test(nextTxt)) {
-          caption = nextTxt.replace(/\s+/g, ' ').replace(/,\s*,/g, ',').replace(/,\s*and\s*,/g, ' and').replace(/\s*,\s*\./g, '.').replace(/\(\s*\)/g, '').trim();
+
+        if (next.length) {
+          // E) explicit .caption class
+          if (!caption && next.hasClass('caption')) {
+            caption = cleanCaption(next.clone().find('a,img,figure').remove().end().text());
+          }
+
+          // B) plain <p> sibling
+          if (!caption && (next.is('p') || next.is('div'))) {
+            const nextTxt = next.clone().find('a,img,figure,h1,h2,h3,h4,h5,h6').remove().end().text();
+            caption = cleanCaption(nextTxt);
+          }
+
+          // Fallback: any short text-bearing sibling
+          if (!caption) {
+            const nextTxt = next.clone().find('a,img,figure').remove().end().text();
+            caption = cleanCaption(nextTxt);
+          }
         }
       }
 
@@ -1032,12 +1272,17 @@ export async function scrapeDxoReview(reviewUrl: string, nocache = false): Promi
  * Tries retested first, then plain, then falls back to scraping device page.
  */
 async function buildReviewUrl(brand: string, model: string): Promise<string | null> {
-  // Build slug: "Samsung" + "Galaxy S25 Ultra" → "samsung-galaxy-s25-ultra"
-  const slug = `${brand} ${model}`.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+  // Build slug: strip parens, lowercase, collapse spaces to hyphens, remove non-slug chars
+  const rawSlug = `${brand} ${model}`
+    .replace(/\([^)]*\)/g, '')           // strip "(anything)"
+    .replace(/[()]/g, '')                 // orphaned parens
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9-]/g, '');
 
   const candidates = [
-    `${DXO_BASE}/${slug}-camera-test-retested/`,
-    `${DXO_BASE}/${slug}-camera-test/`,
+    `${DXO_BASE}/${rawSlug}-camera-test-retested/`,
+    `${DXO_BASE}/${rawSlug}-camera-test/`,
   ];
 
   for (const url of candidates) {
