@@ -132,7 +132,10 @@ function isLinkRelatedToDevice(
 export async function getPhoneDetails(slug: string): Promise<IPhoneDetails> {
     const ck = `gsm:phone-details:v1:${slug}`;
     const cached = await cacheGet<IPhoneDetails>(ck);
-    if (cached) return cached;
+    if (cached) {
+        console.log(`[getPhoneDetails] cache HIT ${ck}`);
+        return cached;
+    }
 
     const html = await getHtml(`${baseUrl}/${slug}.php`);
     const $ = cheerio.load(html);
@@ -235,7 +238,9 @@ export async function getPhoneDetails(slug: string): Promise<IPhoneDetails> {
       const bestUnrelated = candidates[0];
       if (bestUnrelated.score >= 70) { // Only if it's review or camera_samples
         review_url = bestUnrelated.href;
+        } else {
       }
+    } else {
     }
 
     // Additional fallback: search in page text for links
@@ -314,10 +319,26 @@ export async function getPhoneDetails(slug: string): Promise<IPhoneDetails> {
         const picHtml = await getHtml(picturesPageUrl);
         const $pic = cheerio.load(picHtml);
 
+        // ── DEBUG: dump script content to understand GSMArena's page structure ──
+        const scriptBlob = $pic('script').map((_, el) => $pic(el).html() || '').get().join('\n');
+        // Log any script lines that look image-related so we can see the real var names
+        const imageScriptLines = scriptBlob.split('\n').filter(l =>
+          /imgroot|bigpic|pics\s*=|photos\s*=|images\s*=|fdn2|vv\/|\.jpg/i.test(l)
+        ).slice(0, 30);
+        
+        // Log a sample of all <li> elements with data- attrs to find color variant pattern
+        const liAttrs: string[] = [];
+        $pic('li').each((_, el) => {
+          const attrs = Object.keys((el as any).attribs || {})
+            .filter(a => a.startsWith('data-') || a === 'class' || a === 'title')
+            .map(a => `${a}="${$pic(el).attr(a)}"`)
+            .join(' ');
+          if (attrs) liAttrs.push(`<li ${attrs}>`);
+        });
+
         // ── Pass 0A: extract full gallery from inline JS — multiple patterns ──
         // GSMArena uses various variable names across different page versions.
         // We try all known patterns.
-        const scriptBlob = $pic('script').map((_, el) => $pic(el).html() || '').get().join('\n');
 
         // Pattern 1: var imgroot + var pics (older pages)
         const imgrootMatch = scriptBlob.match(/var\s+imgroot\s*=\s*["']([^"']+)["']/);

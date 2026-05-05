@@ -79,7 +79,7 @@ const KNOWN_BRANDS = [
   'Samsung', 'Apple', 'Google', 'Huawei', 'Xiaomi', 'Oppo', 'Vivo',
   'Sony', 'Nokia', 'Motorola', 'Realme', 'Honor', 'Asus', 'Meizu',
   'Pixel', 'iQOO', 'Poco', 'Redmi', 'Tecno', 'Infinix', 'Lava', 'Sharp',
-  'Nubia',
+  'Nubia','Trump'
 ];
 
 /**
